@@ -1,0 +1,10 @@
+faster-whisper==1.2.1
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9.0
+sounddevice>=0.5.5
+pynput>=1.8.1
+pyperclip>=1.11.0
+numpy>=2.0
+scipy>=1.11
+PySide6-Essentials>=6.7
+comtypes>=1.4

@@ -1,0 +1,428 @@
+"""Entry point: hotkey or orb click -> record -> translate -> paste."""
+
+# The CUDA DLL directories must be registered before anything imports
+# ctranslate2, and stdout must exist before anything prints (under pythonw.exe
+# it is None). Keep both first.
+from .cuda_setup import enable_cuda_dlls  # isort: skip
+from .logsetup import setup_output  # isort: skip
+
+setup_output()
+enable_cuda_dlls()
+
+import argparse  # noqa: E402
+import queue  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from pynput import keyboard  # noqa: E402
+
+from . import audio as audio_mod  # noqa: E402
+from .config import load_config, write_default_config  # noqa: E402
+from .feedback import Feedback  # noqa: E402
+from .injector import paste_text, restore_clipboard, save_clipboard  # noqa: E402
+
+IDLE, RECORDING, PROCESSING = "idle", "recording", "processing"
+
+
+def parse_hotkey(name):
+    """Turn a config string like "f9" into a predicate over pynput key events."""
+    name = name.strip().lower()
+    special = getattr(keyboard.Key, name, None)
+    if special is not None:
+        return lambda key: key == special, name.upper()
+    if len(name) == 1:
+        code = keyboard.KeyCode.from_char(name)
+        return lambda key: key == code, name.upper()
+    raise ValueError(f"unrecognised hotkey {name!r} (try 'f9', 'f4', 'pause', 'insert')")
+
+
+class VoicePrompt:
+    def __init__(self, config):
+        self.config = config
+        self.feedback = Feedback(config)
+        self.recorder = audio_mod.AudioRecorder(config)
+        self.engine = None
+        self.orb = None
+        self.state = IDLE
+        self._lock = threading.Lock()
+        self._key_held = False
+        self._hotkey_matches = lambda key: False
+        self._commands = queue.Queue()
+        self._jobs = queue.Queue()
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._listener = None
+        self.streaming = bool(config.streaming)
+        self._session_clipboard = None
+        self._pasted_any = False
+        self.tracker = None
+        # Pinned when a dictation starts, so phrases keep going to the window
+        # you were writing in even if focus wanders mid-sentence.
+        self._target_hwnd = None
+
+    # --- hotkey handling -------------------------------------------------
+
+    def on_press(self, key):
+        """Runs inside the Windows keyboard hook - must return immediately.
+
+        A low-level hook that overruns LowLevelHooksTimeout (300ms by default)
+        gets silently removed by Windows and the hotkey dies with no error.
+        Opening an audio stream can easily take that long, so all we do here is
+        queue the request and let the control thread do the work.
+        """
+        if not self._hotkey_matches(key):
+            return
+        # Windows repeats key-down events while a key is held; without this the
+        # toggle would fire dozens of times per press.
+        if self._key_held:
+            return
+        self._key_held = True
+        self._optimistic_ui()
+        self._commands.put("toggle")
+
+    def on_release(self, key):
+        if self._hotkey_matches(key):
+            self._key_held = False
+
+    def _optimistic_ui(self):
+        """Show the next state before the audio device is ready.
+
+        Opening an input stream costs ~300ms. Waiting for it before repainting
+        makes the click feel broken, so the orb moves now and the control thread
+        catches up; if the device fails to open, toggle() puts it back.
+        """
+        if self.orb is None or not self._ready.is_set():
+            return
+        with self._lock:
+            state = self.state
+        if state == IDLE:
+            self.orb.set_state(RECORDING)
+        elif state == RECORDING:
+            self.orb.set_state(PROCESSING)
+
+    def request_toggle(self):
+        """Called by the orb; same queue as the hotkey so they can't interleave."""
+        self._optimistic_ui()
+        self._commands.put("toggle")
+
+    def _control_loop(self):
+        """Serialises start/stop so the hook thread never blocks on audio I/O."""
+        while not self._stop.is_set():
+            try:
+                self._commands.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                self.toggle()
+            except Exception as exc:
+                self.feedback.error(f"toggle failed: {exc}")
+                self._set_state(IDLE)
+
+    def _set_state(self, state):
+        with self._lock:
+            self.state = state
+        if self.orb is not None:
+            self.orb.set_state(state)
+
+    def toggle(self):
+        if not self._ready.is_set():
+            print("[..] still loading the model")
+            return
+
+        with self._lock:
+            state = self.state
+
+        if state == IDLE:
+            # Pin for the whole dictation: the window you last clicked into.
+            # Pinning rather than re-reading per phrase keeps one session's
+            # phrases together even if you click around while talking.
+            if self.tracker is not None:
+                self._target_hwnd = self.tracker.current()
+                if self._target_hwnd:
+                    print(f"[target] writing into: {self.tracker.title}")
+                    if self.config.restore_caret:
+                        # Bring the window forward and put the cursor back in
+                        # the box now, while you are still drawing breath, so
+                        # the first phrase has somewhere to land.
+                        self.tracker.restore()
+                        self.tracker.restore_caret()
+            if self.streaming:
+                # Snapshot once for the whole session; phrases paste repeatedly.
+                self._session_clipboard = save_clipboard(self.config)
+                self._pasted_any = False
+            try:
+                self.recorder.start()
+            except Exception as exc:
+                self.feedback.error(f"could not start recording: {exc}")
+                if self.orb:
+                    self.orb.set_state(IDLE)   # undo the optimistic repaint
+                    self.orb.flash("error")
+                return
+            self._set_state(RECORDING)
+            self.feedback.recording_started(self.recorder.device_name)
+
+        elif state == RECORDING:
+            self._set_state(PROCESSING)
+            self.feedback.recording_stopped()
+            try:
+                clip = self.recorder.stop()
+            except Exception as exc:
+                self.feedback.error(f"could not stop recording: {exc}")
+                self._set_state(IDLE)
+                return
+            if self.streaming:
+                # stop() already queued the final phrase and the end marker;
+                # the streaming worker finishes up and returns us to idle.
+                return
+            # Hand off to the worker: transcription takes about a second and must
+            # not run on the control thread, which needs to stay responsive.
+            self._jobs.put(clip)
+
+        else:
+            print("[..] still processing the previous dictation")
+
+    # --- worker ----------------------------------------------------------
+
+    def _worker(self):
+        while not self._stop.is_set():
+            try:
+                clip = self._jobs.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                self._handle_clip(clip)
+            except Exception as exc:
+                self.feedback.error(f"processing failed: {exc}")
+                if self.orb:
+                    self.orb.flash("error")
+            finally:
+                self._set_state(IDLE)
+                self._jobs.task_done()
+
+    def _streaming_worker(self):
+        """Translate and paste each phrase as you finish saying it.
+
+        One thread, one queue: phrases reach the prompt box in the order you
+        spoke them, and each paste only ever appends.
+        """
+        while not self._stop.is_set():
+            try:
+                phrase = self.recorder.get_phrase(timeout=0.25)
+            except queue.Empty:
+                continue
+
+            if phrase is audio_mod.END_OF_SESSION:
+                restore_clipboard(self._session_clipboard, self.config)
+                self._session_clipboard = None
+                if self._pasted_any:
+                    if self.orb:
+                        self.orb.flash("ok")
+                else:
+                    self.feedback.nothing_heard()
+                    if self.orb:
+                        self.orb.flash("error")
+                self._set_state(IDLE)
+                continue
+
+            try:
+                text = self.engine.translate(phrase)
+                if not text:
+                    continue
+                # A leading space keeps phrases apart without a trailing one
+                # dangling when you stop.
+                chunk = text if not self._pasted_any else " " + text
+                if paste_text(chunk, self.config, manage_clipboard=False,
+                              target_hwnd=self._target_hwnd):
+                    self._pasted_any = True
+                    self.feedback.success(text)
+            except Exception as exc:
+                self.feedback.error(f"phrase failed: {exc}")
+
+    def _handle_clip(self, clip):
+        if clip is None:
+            self.feedback.nothing_heard()
+            if self.orb:
+                self.orb.flash("error")
+            return
+        text = self.engine.translate(clip)
+        if not text:
+            self.feedback.nothing_heard()
+            if self.orb:
+                self.orb.flash("error")
+            return
+        if paste_text(text, self.config, target_hwnd=self._target_hwnd):
+            self.feedback.success(text)
+            if self.orb:
+                self.orb.flash("ok")
+        else:
+            self.feedback.error(f"could not paste, text was: {text}")
+            if self.orb:
+                self.orb.flash("error")
+
+    # --- startup ---------------------------------------------------------
+
+    def _load_engine(self):
+        """Load Whisper off the main thread so the orb appears immediately."""
+        from .transcriber import WhisperEngine
+
+        try:
+            engine = WhisperEngine(self.config)
+            engine.load()
+            self.engine = engine
+            self._ready.set()
+            self._set_state(IDLE)
+            print("[ready] press the hotkey or click the orb")
+        except Exception as exc:
+            self.feedback.error(f"could not load Whisper: {exc}")
+            if self.orb:
+                self.orb.flash("error")
+
+    def _start_threads(self):
+        if self.config.remember_target:
+            from .target import TargetTracker
+
+            self.tracker = TargetTracker().start()
+        threading.Thread(target=self._control_loop, daemon=True).start()
+        worker = self._streaming_worker if self.streaming else self._worker
+        threading.Thread(target=worker, daemon=True).start()
+        self._listener = keyboard.Listener(
+            on_press=self.on_press, on_release=self.on_release
+        )
+        self._listener.start()
+
+    def shutdown(self):
+        self._stop.set()
+        if self.tracker is not None:
+            self.tracker.stop()
+        if self._listener is not None:
+            self._listener.stop()
+        if self.recorder.is_recording:
+            try:
+                self.recorder.stop()
+            except Exception:
+                pass
+        print("Stopped.\n")
+
+    def run(self, show_ui=True):
+        self._hotkey_matches, hotkey_label = parse_hotkey(self.config.hotkey)
+
+        target = "English" if self.config.task == "translate" else "as spoken"
+        print("\n" + "=" * 62)
+        print(f"  Press {hotkey_label} to start, {hotkey_label} again to stop.")
+        if show_ui:
+            print("  Or click the orb. Drag to move it, right-click to quit.")
+        print(f"  Speak Romanian -> {target} text is pasted where your cursor is.")
+        if self.streaming:
+            print("  Live: each phrase is pasted when you pause, as you speak.")
+        if not self.config.auto_enter:
+            print("  Nothing is submitted for you; press Enter yourself.")
+        print("=" * 62 + "\n")
+
+        if not show_ui:
+            self._start_threads()
+            self._load_engine()
+            try:
+                self._listener.join()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                self.shutdown()
+            return
+
+        from .overlay import Orb
+
+        self.orb = Orb(
+            on_toggle=self.request_toggle, on_quit=self.shutdown, tooltip=hotkey_label
+        )
+        self.orb.level_getter = lambda: self.recorder.level
+        self.orb.set_state(PROCESSING)  # spinner until the model is loaded
+
+        self._start_threads()
+        threading.Thread(target=self._load_engine, daemon=True).start()
+
+        try:
+            self.orb.run()
+        except KeyboardInterrupt:
+            self.shutdown()
+
+
+def run_selftest(config):
+    """Record a fixed clip and print the result without touching the clipboard."""
+    from .transcriber import WhisperEngine
+
+    engine = WhisperEngine(config)
+    engine.load()
+
+    seconds = 5
+    print(f"\nSpeak Romanian for {seconds} seconds, starting now...")
+    clip = audio_mod.record_fixed(config, seconds)
+    print("Done recording, translating...\n")
+
+    text = engine.translate(clip)
+    print("-" * 62)
+    print(text if text else "(nothing recognised)")
+    print("-" * 62)
+    return 0 if text else 1
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="relay",
+        description="Dictate in Romanian, get an English prompt where you're typing.",
+    )
+    parser.add_argument("--config", help="path to a config.json")
+    parser.add_argument("--list-devices", action="store_true", help="show audio inputs and exit")
+    parser.add_argument(
+        "--mic-test", action="store_true", help="measure signal level on every input"
+    )
+    parser.add_argument(
+        "--selftest", action="store_true", help="record 5s, print the translation, don't paste"
+    )
+    parser.add_argument(
+        "--write-config", action="store_true", help="write a config.json with the defaults"
+    )
+    parser.add_argument("--check-cuda", action="store_true", help="report GPU availability and exit")
+    parser.add_argument("--no-ui", action="store_true", help="hotkey only, no floating orb")
+    args = parser.parse_args(argv)
+
+    if args.list_devices:
+        audio_mod.list_devices()
+        return 0
+
+    if args.mic_test:
+        return audio_mod.mic_test(load_config(args.config))
+
+    if args.write_config:
+        path = write_default_config()
+        print(f"wrote {path}")
+        return 0
+
+    if args.check_cuda:
+        from .cuda_setup import cuda_device_count
+
+        added = enable_cuda_dlls(verbose=True)
+        count = cuda_device_count()
+        print(f"  DLL directories registered: {len(added)}")
+        print(f"  CUDA devices visible to ctranslate2: {count}")
+        print("  -> GPU ready" if count else "  -> no GPU; will run on CPU")
+        return 0 if count else 1
+
+    config = load_config(args.config)
+
+    if args.selftest:
+        return run_selftest(config)
+
+    from .single_instance import already_running
+
+    if already_running():
+        print("[!!] relay is already running; not starting a second copy")
+        return 1
+
+    print(f"\n=== relay started {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    VoicePrompt(config).run(show_ui=not args.no_ui)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,33 @@
+{
+  "hotkey": "f9",
+
+  "model_size": "large-v3",
+  "device": "cuda",
+  "compute_type": "float16",
+  "source_language": "ro",
+  "task": "translate",
+  "beam_size": 1,
+
+  "input_device": null,
+  "sample_rate": 16000,
+  "max_recording_seconds": 120,
+  "min_recording_seconds": 0.3,
+  "silence_rms_threshold": 0.0005,
+
+  "streaming": true,
+  "phrase_silence_seconds": 0.7,
+  "max_phrase_seconds": 15,
+  "min_phrase_seconds": 0.4,
+  "vad_speech_multiplier": 3.0,
+  "vad_min_rms": 0.0008,
+
+  "remember_target": true,
+  "restore_caret": true,
+  "auto_enter": false,
+  "restore_clipboard": true,
+  "paste_delay_ms": 120,
+  "restore_delay_ms": 500,
+
+  "beep_feedback": false,
+  "print_transcript": true
+}
