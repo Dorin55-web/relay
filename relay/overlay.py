@@ -19,22 +19,32 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
-from PySide6.QtGui import (QAction, QColor, QIcon, QPainter, QPainterPath,
-                           QPen, QRadialGradient)
+from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
+                           QPainterPath, QPen, QRadialGradient)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
 ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
-DOT_BOX = 40             # visible size of the collapsed dot area
-CAPSULE_W = 84           # visible width when open
-CAPSULE_H = 40
+DOT_BOX = 48             # visible size of the collapsed tile
+CAPSULE_W = 100          # visible width when open
+CAPSULE_H = 48
 SHADOW_PAD = 12          # room around the artwork for the drop shadow
 
-DOT_R = 9.0              # idle
-DOT_R_OPEN = 5.0         # shrinks once the capsule takes over
-GLOW_R = 18.0            # halo scales with the dot, or it looks crowded
+DOT_R_OPEN = 6.0         # the dot shrinks once the live bars take over
+GLOW_R = 21.0            # halo scales with the dot, or it looks crowded
+
+# The icon's mark, as fractions of the tile, so the thing floating on screen and
+# the thing in the taskbar are the same drawing at two sizes.
+ICON_INSET = 0.03
+ICON_RADIUS = 0.23
+ICON_DOT_X = 0.252
+ICON_DOT_R = 0.108
+ICON_BAR_FIRST = 0.472
+ICON_BAR_STEP = 0.170
+ICON_BAR_W = 0.088
+ICON_BAR_H = (0.40, 0.64, 0.30)
 
 BAR_COUNT = 8            # fewer bars, or they overlap in the narrow capsule
 BAR_WIDTH = 3.0
@@ -42,6 +52,8 @@ SAMPLE_EVERY = 4         # frames per bar; the row then spans about half a secon
 FRAME_MS = 16            # 60fps: Qt can afford it and the motion reads smoother
 
 CAPSULE_RGB = (14, 16, 21)
+TILE_TOP_RGB = (32, 36, 46)      # same gradient as assets/relay.ico
+TILE_BOTTOM_RGB = (13, 15, 20)
 CAPSULE_ALPHA = 232
 
 # One colour, in every state. The capsule opening and closing is the signal for
@@ -372,20 +384,54 @@ class Orb(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         accent = ACCENT
-        cx, cy = self._dot_center()
 
-        if self._open > 0.01:
-            self._paint_capsule(painter)
-            if self._open > 0.5:
-                self._paint_bars(painter, accent)
+        # The tile is always there now; it only widens into a capsule. Idle it
+        # carries the icon's own mark, so what floats on screen is recognisably
+        # the same thing as the taskbar button.
+        self._paint_capsule(painter)
 
+        if self._open > 0.5:
+            self._paint_bars(painter, accent)
+        if self._open < 0.5:
+            self._paint_icon_bars(painter, accent)
+
+        cx, cy = self._mark_dot_center()
         self._paint_glow(painter, accent, cx, cy)
 
-        radius = DOT_R + (DOT_R_OPEN - DOT_R) * self._open
+        idle_r = DOT_BOX * ICON_DOT_R
+        radius = idle_r + (DOT_R_OPEN - idle_r) * self._open
         painter.setPen(Qt.NoPen)
         painter.setBrush(accent)
-        painter.drawEllipse(QPoint(int(cx), int(cy)), int(radius), int(radius))
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
         painter.end()
+
+    def _mark_dot_center(self):
+        """Where the dot sits: inside the icon when idle, at the capsule's end
+        once it opens. Interpolated, so it slides rather than jumps."""
+        _, cy = self._dot_center()
+        tile_left = self._tile_left()
+        idle_x = tile_left + DOT_BOX * ICON_DOT_X
+        open_x, _ = self._dot_center()
+        return idle_x + (open_x - idle_x) * self._open, cy
+
+    def _tile_left(self):
+        return SHADOW_PAD + (self._visible_width() - DOT_BOX if self._grow_left else 0)
+
+    def _paint_icon_bars(self, painter, accent):
+        """The icon's three static bars, for the resting state."""
+        fade = int(255 * min(1.0, (0.5 - self._open) * 2))
+        if fade <= 0:
+            return
+        left = self._tile_left()
+        _, cy = self._dot_center()
+        for i, height in enumerate(ICON_BAR_H):
+            x = left + DOT_BOX * (ICON_BAR_FIRST + i * ICON_BAR_STEP)
+            half = DOT_BOX * height / 2
+            colour = QColor(accent)
+            colour.setAlpha(int((255 if i == 1 else 200) * fade / 255))
+            painter.setPen(QPen(colour, DOT_BOX * ICON_BAR_W,
+                                Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
 
     def _paint_capsule(self, painter):
         """Translucent rounded background plus a soft shadow beneath it."""
@@ -393,7 +439,10 @@ class Orb(QWidget):
             float(SHADOW_PAD), float(SHADOW_PAD),
             self._visible_width(), float(CAPSULE_H),
         )
-        radius = CAPSULE_H / 2
+        # Rounded square at rest, full pill once open: the corner travels with
+        # the width, so the icon unrolls into the meter instead of morphing.
+        idle_radius = DOT_BOX * ICON_RADIUS
+        radius = idle_radius + (CAPSULE_H / 2 - idle_radius) * self._open
 
         # Cheap drop shadow: a few offset rounded rects at low alpha. Qt's
         # graphics effect would need a second render pass for the same look.
@@ -404,8 +453,15 @@ class Orb(QWidget):
             painter.setBrush(QColor(0, 0, 0, alpha))
             painter.drawRoundedRect(shadow, radius + spread, radius + spread)
 
-        painter.setBrush(QColor(*CAPSULE_RGB, int(CAPSULE_ALPHA * self._open)))
-        painter.setPen(QPen(QColor(255, 255, 255, int(16 * self._open)), 1))
+        # The icon's vertical gradient, not a flat fill: at rest this tile is
+        # the icon, and the two should not be noticeably different objects.
+        tile = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+        top = QColor(*TILE_TOP_RGB, CAPSULE_ALPHA)
+        bottom = QColor(*TILE_BOTTOM_RGB, CAPSULE_ALPHA)
+        tile.setColorAt(0.0, top)
+        tile.setColorAt(1.0, bottom)
+        painter.setBrush(tile)
+        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
         painter.drawRoundedRect(rect, radius, radius)
 
     def _paint_glow(self, painter, accent, cx, cy):
@@ -430,11 +486,11 @@ class Orb(QWidget):
         # Tighter insets than before: in a capsule this narrow, the old 15-16px
         # margins ate most of the room the bars need.
         if self._grow_left:
-            left = SHADOW_PAD + 12
-            right = cx - 13
+            left = SHADOW_PAD + 14
+            right = cx - 15
         else:
-            left = cx + 13
-            right = SHADOW_PAD + self._visible_width() - 12
+            left = cx + 15
+            right = SHADOW_PAD + self._visible_width() - 14
 
         span = right - left
         if span <= 2:
