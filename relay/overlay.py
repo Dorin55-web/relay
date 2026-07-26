@@ -62,14 +62,13 @@ BAR_SOURCE = [min(len(ICON_BAR_H) - 1, i * len(ICON_BAR_H) // BAR_COUNT)
 MAX_HALF = (CAPSULE_H - 16) / 2   # tallest a live bar gets
 LEVEL_CURVE = 0.7                 # quiet speech still moves the bars visibly
 
-# The levels that would draw the icon's own bar heights. The history is seeded
-# with these when the capsule opens, so the meter starts from the shape the mark
-# already had rather than from silence - otherwise the bars collapse to nothing
-# on the way out and grow back, which is the flicker this is all about.
-ICON_LEVELS = [
-    min(1.0, (DOT_BOX * ICON_BAR_H[source] * MARK_SCALE / 2 / MAX_HALF)
-        ** (1 / LEVEL_CURVE))
-    for source in BAR_SOURCE
+# The levels that would draw the icon's own bar heights, one per icon bar. The
+# history is seeded from these when the capsule opens, so the meter starts from
+# the shape the mark already had rather than from silence - otherwise the bars
+# collapse to nothing on the way out and grow back.
+ICON_LEVEL = [
+    min(1.0, (DOT_BOX * height * MARK_SCALE / 2 / MAX_HALF) ** (1 / LEVEL_CURVE))
+    for height in ICON_BAR_H
 ]
 
 
@@ -384,8 +383,9 @@ class Orb(QWidget):
             # wherever the dot has been dragged since the last dictation.
             self._grow_left = self._choose_direction()
             # Start the meter from the mark's own shape, not from silence.
+            # After choosing the side, since the order depends on it.
             self._history.clear()
-            self._history.extend(ICON_LEVELS)
+            self._history.extend(self._seed_levels())
 
         if self._open_t != want_open:
             # A fixed number of frames with a smoothstep on top, rather than a
@@ -454,8 +454,30 @@ class Orb(QWidget):
         return SHADOW_PAD + (self._visible_width() - DOT_BOX if self._grow_left else 0)
 
     def _mark_x(self, fraction):
-        """An icon fraction placed in the circle, shrunk about its centre."""
+        """An icon fraction placed in the circle, shrunk about its centre.
+
+        Mirrored when the capsule opens leftwards. The dot stays where you
+        clicked and the capsule grows away from it, so on the right of the
+        screen the dot ends up at the capsule's right end with the bars running
+        left. The resting mark has to face the same way, or it turns over
+        halfway through every dictation and the bars sweep across the dot.
+        """
+        if self._grow_left:
+            fraction = 1.0 - fraction
         return self._tile_left() + DOT_BOX * (0.5 + (fraction - 0.5) * MARK_SCALE)
+
+    def _bar_source(self, i):
+        """Which icon bar meter bar `i` grew out of.
+
+        Meter bars are numbered left to right, so when the row runs leftwards
+        from the dot the correspondence reverses: the bar nearest the dot is
+        the last one, not the first.
+        """
+        return BAR_SOURCE[BAR_COUNT - 1 - i] if self._grow_left else BAR_SOURCE[i]
+
+    def _seed_levels(self):
+        """The icon's heights as meter levels, in the current bar order."""
+        return [ICON_LEVEL[self._bar_source(i)] for i in range(BAR_COUNT)]
 
     def _paint_capsule(self, painter):
         """Translucent rounded background plus a soft shadow beneath it."""
@@ -527,7 +549,7 @@ class Orb(QWidget):
         icon_width = DOT_BOX * ICON_BAR_W * MARK_SCALE
 
         for i, level in enumerate(self._history):
-            source = BAR_SOURCE[i]
+            source = self._bar_source(i)
 
             icon_x = self._mark_x(ICON_BAR_FIRST + source * ICON_BAR_STEP)
             icon_half = DOT_BOX * ICON_BAR_H[source] * MARK_SCALE / 2
