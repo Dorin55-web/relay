@@ -52,6 +52,30 @@ BAR_COUNT = 8            # fewer bars, or they overlap in the narrow capsule
 BAR_WIDTH = 3.0
 SAMPLE_EVERY = 4         # frames per bar; the row then spans about half a second
 FRAME_MS = 16            # 60fps: Qt can afford it and the motion reads smoother
+OPEN_FRAMES = 15         # about 240ms to open or close, eased at both ends
+
+# Which of the icon's three bars each meter bar comes from. Opening fans the
+# eight apart from those three positions; closing gathers them back.
+BAR_SOURCE = [min(len(ICON_BAR_H) - 1, i * len(ICON_BAR_H) // BAR_COUNT)
+              for i in range(BAR_COUNT)]
+
+MAX_HALF = (CAPSULE_H - 16) / 2   # tallest a live bar gets
+LEVEL_CURVE = 0.7                 # quiet speech still moves the bars visibly
+
+# The levels that would draw the icon's own bar heights. The history is seeded
+# with these when the capsule opens, so the meter starts from the shape the mark
+# already had rather than from silence - otherwise the bars collapse to nothing
+# on the way out and grow back, which is the flicker this is all about.
+ICON_LEVELS = [
+    min(1.0, (DOT_BOX * ICON_BAR_H[source] * MARK_SCALE / 2 / MAX_HALF)
+        ** (1 / LEVEL_CURVE))
+    for source in BAR_SOURCE
+]
+
+
+def _smoothstep(t):
+    """Ease in and out. Linear progress in, eased position out."""
+    return t * t * (3.0 - 2.0 * t)
 
 CAPSULE_RGB = (14, 16, 21)
 TILE_TOP_RGB = (32, 36, 46)      # same gradient as assets/relay.ico
@@ -127,7 +151,11 @@ class Orb(QWidget):
         self._press_origin = None
         self._history = deque([0.0] * BAR_COUNT, maxlen=BAR_COUNT)
         # 0 = closed, 1 = fully open; drives width so the capsule unfurls.
+        # _open is the eased value that gets drawn, _open_t the linear progress
+        # behind it. Keeping them apart is what allows an ease at both ends
+        # instead of the asymptotic crawl a per-frame multiplier gives.
         self._open = 0.0
+        self._open_t = 0.0
         self._settled_painted = False
 
         self.setWindowFlags(
@@ -351,16 +379,25 @@ class Orb(QWidget):
         self._frame += 1
 
         want_open = 1.0 if self.state in ("recording", "processing") else 0.0
-        if want_open > 0.0 and self._open <= 0.001:
+        if want_open > 0.0 and self._open_t <= 0.001:
             # Pick the side now, while still closed, so the choice reflects
             # wherever the dot has been dragged since the last dictation.
             self._grow_left = self._choose_direction()
-        if abs(self._open - want_open) > 0.001:
-            # Ease towards the target instead of snapping, so the capsule
-            # unfurls and folds away rather than blinking between two sizes.
-            self._open += (want_open - self._open) * 0.28
-            if abs(self._open - want_open) <= 0.01:
-                self._open = want_open
+            # Start the meter from the mark's own shape, not from silence.
+            self._history.clear()
+            self._history.extend(ICON_LEVELS)
+
+        if self._open_t != want_open:
+            # A fixed number of frames with a smoothstep on top, rather than a
+            # per-frame fraction of the remaining distance: that older form
+            # started at full speed and then crawled, so the capsule looked
+            # like it was being yanked open and easing shut.
+            step = 1.0 / OPEN_FRAMES
+            if want_open > self._open_t:
+                self._open_t = min(want_open, self._open_t + step)
+            else:
+                self._open_t = max(want_open, self._open_t - step)
+            self._open = _smoothstep(self._open_t)
             self._apply_geometry()
 
         if self._frame % SAMPLE_EVERY == 0:
@@ -368,8 +405,9 @@ class Orb(QWidget):
                 self._history.append(max(0.0, min(1.0, self.level_getter())))
             elif self.state == "processing":
                 self._history.append(0.30 + 0.22 * math.sin(self._phase * 2.6))
-            else:
-                self._history.append(0.0)
+            # Idle: leave the history alone. Feeding it zeros while the capsule
+            # is still closing would drag the bars down to nothing underneath
+            # the animation that is trying to return them to the mark.
 
         # At rest the dot is a static circle, so redrawing it 60 times a second
         # would burn CPU for no visible change on something that stays open all
@@ -392,10 +430,7 @@ class Orb(QWidget):
         # the same thing as the taskbar button.
         self._paint_capsule(painter)
 
-        if self._open > 0.5:
-            self._paint_bars(painter, accent)
-        if self._open < 0.5:
-            self._paint_icon_bars(painter, accent)
+        self._paint_bars(painter, accent)
 
         cx, cy = self._mark_dot_center()
         self._paint_glow(painter, accent, cx, cy)
@@ -421,21 +456,6 @@ class Orb(QWidget):
     def _mark_x(self, fraction):
         """An icon fraction placed in the circle, shrunk about its centre."""
         return self._tile_left() + DOT_BOX * (0.5 + (fraction - 0.5) * MARK_SCALE)
-
-    def _paint_icon_bars(self, painter, accent):
-        """The icon's three static bars, for the resting state."""
-        fade = int(255 * min(1.0, (0.5 - self._open) * 2))
-        if fade <= 0:
-            return
-        _, cy = self._dot_center()
-        for i, height in enumerate(ICON_BAR_H):
-            x = self._mark_x(ICON_BAR_FIRST + i * ICON_BAR_STEP)
-            half = DOT_BOX * height * MARK_SCALE / 2
-            colour = QColor(accent)
-            colour.setAlpha(int((255 if i == 1 else 200) * fade / 255))
-            painter.setPen(QPen(colour, DOT_BOX * ICON_BAR_W * MARK_SCALE,
-                                Qt.SolidLine, Qt.RoundCap))
-            painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
 
     def _paint_capsule(self, painter):
         """Translucent rounded background plus a soft shadow beneath it."""
@@ -484,7 +504,14 @@ class Orb(QWidget):
         painter.drawEllipse(QPoint(int(cx), int(cy)), int(GLOW_R), int(GLOW_R))
 
     def _paint_bars(self, painter, accent):
-        """Level history as bars scrolling right to left."""
+        """One row of bars that is the mark at rest and the meter once open.
+
+        Not two sets cross-fading: that left a moment in the middle where the
+        first had gone and the second had not arrived, and the orb blinked
+        every time you started or stopped. Each bar instead travels between
+        where the icon puts it and where the meter does, so there is always a
+        full row on screen and the mark simply unrolls.
+        """
         cx, cy = self._dot_center()
         # Tighter insets than before: in a capsule this narrow, the old 15-16px
         # margins ate most of the room the bars need.
@@ -495,22 +522,33 @@ class Orb(QWidget):
             left = cx + 15
             right = SHADOW_PAD + self._visible_width() - 14
 
-        span = right - left
-        if span <= 2:
-            return
-        step = span / (BAR_COUNT - 1)
-        max_half = (CAPSULE_H - 16) / 2
-        fade = int(255 * min(1.0, (self._open - 0.5) * 2))
+        step = max(1.0, right - left) / (BAR_COUNT - 1)
+        open_w = self._open
+        icon_width = DOT_BOX * ICON_BAR_W * MARK_SCALE
 
         for i, level in enumerate(self._history):
-            half = max(0.5, max_half * (level ** 0.7))
-            x = left + i * step
+            source = BAR_SOURCE[i]
+
+            icon_x = self._mark_x(ICON_BAR_FIRST + source * ICON_BAR_STEP)
+            icon_half = DOT_BOX * ICON_BAR_H[source] * MARK_SCALE / 2
+            live_half = max(0.5, MAX_HALF * (level ** LEVEL_CURVE))
+
+            x = icon_x + (left + i * step - icon_x) * open_w
+            half = icon_half + (live_half - icon_half) * open_w
+            width = icon_width + (BAR_WIDTH - icon_width) * open_w
+
             # Same hue throughout; only brightness follows the level, so a
-            # quiet bar reads as dimmer rather than as a different colour.
+            # quiet bar reads as dimmer rather than as a different colour. At
+            # rest the icon's own emphasis takes over instead.
             dim = _blend(accent, QColor(*CAPSULE_RGB), 0.45)
-            colour = _blend(dim, accent, min(1.0, half / max_half))
-            colour.setAlpha(fade)
-            painter.setPen(QPen(colour, BAR_WIDTH, Qt.SolidLine, Qt.RoundCap))
+            live_colour = _blend(dim, accent, min(1.0, half / MAX_HALF))
+            icon_colour = QColor(accent)
+            icon_colour.setAlpha(255 if source == 1 else 200)
+            colour = _blend(icon_colour, live_colour, open_w)
+            colour.setAlpha(int(icon_colour.alpha()
+                                + (255 - icon_colour.alpha()) * open_w))
+
+            painter.setPen(QPen(colour, width, Qt.SolidLine, Qt.RoundCap))
             # Float coordinates, not int: the step is fractional, so truncating
             # made the gaps alternate 2px/3px, and quantised bar heights to
             # whole pixels so quiet speech moved them in visible jumps.
