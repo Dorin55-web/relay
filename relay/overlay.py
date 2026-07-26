@@ -86,6 +86,10 @@ class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
                  prompts_getter=None, on_prompt=None, on_edit_prompts=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
+        # Qt quits once the last primary window closes, and a Qt.Tool window -
+        # which the dot is - does not count as one. Without this, closing the
+        # prompt editor takes the whole app down with it and the dot vanishes.
+        self.app.setQuitOnLastWindowClosed(False)
         super().__init__()
 
         self.on_toggle = on_toggle
