@@ -11,6 +11,9 @@ you type into it - so none of the non-activating style applies. It never becomes
 a paste target either: the tracker ignores windows belonging to our own process.
 """
 
+import ctypes
+import sys
+
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QCursor, QFont
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
@@ -30,6 +33,21 @@ MUTED = "#8b93a1"
 ROW_HEIGHT = 32          # ten of these fit without the list ever scrolling
 RESIZE_MARGIN = 6        # grab strip around the frameless edge
 TITLE_HEIGHT = 38
+
+# Windows 11 rounds ordinary windows by itself, but a frameless Qt window is a
+# WS_POPUP and DWM leaves those square. The stylesheet's border-radius only
+# rounds the painted background, not the window, so the corner has to be asked
+# for. https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_BORDER_COLOR = 34
+DWMWCP_ROUND = 2
+
+
+def _colorref(hex_colour):
+    """#rrggbb -> the 0x00bbggrr integer DWM wants."""
+    value = hex_colour.lstrip("#")
+    red, green, blue = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return (blue << 16) | (green << 8) | red
 
 STYLESHEET = f"""
 QWidget {{
@@ -155,6 +173,7 @@ class PromptEditor(QWidget):
         self.entries = [dict(p) for p in prompts_mod.load()]
         self.index = -1
         self._loading = False       # guard: filling the fields is not an edit
+        self._rounded = False
 
         self._build()
         # After _build, not before: the #primary rule only matches once the
@@ -413,6 +432,38 @@ class PromptEditor(QWidget):
         return False
 
     # --- frameless chrome -------------------------------------------------
+
+    def showEvent(self, event):
+        # Needs a real HWND, which only exists once the window is being shown.
+        super().showEvent(event)
+        if not self._rounded:
+            self._rounded = True
+            self._round_corners()
+
+    def _round_corners(self):
+        """Ask DWM to round the window and tint its border.
+
+        A no-op before Windows 11: DwmSetWindowAttribute returns a failure code
+        for an attribute the running version does not know, which is fine - the
+        window is simply square, as it was.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.winId())
+            dwm = ctypes.windll.dwmapi
+            preference = ctypes.c_int(DWMWCP_ROUND)
+            dwm.DwmSetWindowAttribute(
+                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(preference), ctypes.sizeof(preference),
+            )
+            border = ctypes.c_uint(_colorref(LINE))
+            dwm.DwmSetWindowAttribute(
+                hwnd, DWMWA_BORDER_COLOR,
+                ctypes.byref(border), ctypes.sizeof(border),
+            )
+        except Exception as exc:
+            print(f"[prompts] could not round the window corners: {exc}")
 
     def _edges_at(self, pos):
         """Which window edges the pointer is close enough to drag."""
