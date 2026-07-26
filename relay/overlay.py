@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
-                           QPainterPath, QPen, QRadialGradient)
+                           QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +41,8 @@ GLOW_R = 21.0            # halo scales with the dot, or it looks crowded
 # is why the mark is shrunk a little - the corners of its bounding box would
 # otherwise run into the curve.
 MARK_SCALE = 0.86
+ICON_INSET = 0.03        # square-tile margin, for the taskbar icon
+ICON_RADIUS = 0.23
 ICON_DOT_X = 0.252
 ICON_DOT_R = 0.108
 ICON_BAR_FIRST = 0.472
@@ -75,6 +77,86 @@ ICON_LEVEL = [
 def _smoothstep(t):
     """Ease in and out. Linear progress in, eased position out."""
     return t * t * (3.0 - 2.0 * t)
+
+
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
+
+
+def _icon_pixmap(size, mirrored):
+    """The app icon at one size, facing the way the orb currently faces.
+
+    The same drawing as assets/relay.ico - on a square tile, because that is
+    what a taskbar button is - but flipped when the orb is. The file on disk
+    stays unmirrored; it is what the shortcuts point at, and a .lnk cannot
+    follow anything.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    s = float(size)
+
+    def at(fraction):
+        return s * (1.0 - fraction if mirrored else fraction)
+
+    rect = QRectF(s * ICON_INSET, s * ICON_INSET,
+                  s * (1 - 2 * ICON_INSET), s * (1 - 2 * ICON_INSET))
+    radius = s * ICON_RADIUS
+    path = QPainterPath()
+    path.addRoundedRect(rect, radius, radius)
+
+    tile = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+    tile.setColorAt(0.0, QColor(*TILE_TOP_RGB))
+    tile.setColorAt(1.0, QColor(*TILE_BOTTOM_RGB))
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(tile)
+    painter.drawPath(path)
+
+    if size >= 32:
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 26), max(1.0, s * 0.008)))
+        painter.drawPath(path)
+
+    cy = s * 0.5
+    dot_x = at(ICON_DOT_X)
+    dot_r = s * ICON_DOT_R
+
+    if size >= 32:
+        glow_r = dot_r * 2.6
+        gradient = QRadialGradient(dot_x, cy, glow_r)
+        inner = QColor(ACCENT)
+        inner.setAlpha(64)
+        edge = QColor(ACCENT)
+        edge.setAlpha(0)
+        gradient.setColorAt(0.0, inner)
+        gradient.setColorAt(1.0, edge)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(gradient)
+        painter.drawEllipse(QPointF(dot_x, cy), glow_r, glow_r)
+
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(ACCENT)
+    painter.drawEllipse(QPointF(dot_x, cy), dot_r, dot_r)
+
+    for i, height in enumerate(ICON_BAR_H):
+        x = at(ICON_BAR_FIRST + i * ICON_BAR_STEP)
+        half = s * height / 2
+        colour = QColor(ACCENT)
+        colour.setAlpha(255 if i == 1 else 200)
+        painter.setPen(QPen(colour, s * ICON_BAR_W, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
+
+    painter.end()
+    return pixmap
+
+
+def build_icon(mirrored=False):
+    """A multi-size icon, so the taskbar gets one drawn for its own size."""
+    icon = QIcon()
+    for size in ICON_SIZES:
+        icon.addPixmap(_icon_pixmap(size, mirrored))
+    return icon
 
 CAPSULE_RGB = (14, 16, 21)
 TILE_TOP_RGB = (32, 36, 46)      # same gradient as assets/relay.ico
@@ -128,9 +210,9 @@ class Orb(QWidget):
         # which the dot is - does not count as one. Without this, closing the
         # prompt editor takes the whole app down with it and the dot vanishes.
         self.app.setQuitOnLastWindowClosed(False)
-        if ICON_PATH.is_file():
-            self.app.setWindowIcon(QIcon(str(ICON_PATH)))
         super().__init__()
+
+        self._icon_mirrored = None
 
         self.on_toggle = on_toggle
         self.on_quit = on_quit
@@ -169,6 +251,7 @@ class Orb(QWidget):
 
         self.anchor_x, self.anchor_y = self._load_position()
         self._apply_geometry(force=True)
+        self._refresh_icon()
         self.show()
         _make_non_activating(self)
 
@@ -177,6 +260,22 @@ class Orb(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(FRAME_MS)
+
+    # --- identity ---------------------------------------------------------
+
+    def _refresh_icon(self):
+        """Face the app icon the way the mark on screen faces.
+
+        The taskbar button and the dot are the same program; having one point
+        left while the other points right is exactly the mismatch the mark was
+        made adaptive to avoid. Redrawn only when the side actually changes,
+        which is a drag or a move between screens - not every frame.
+        """
+        mirrored = self._choose_direction()
+        if mirrored == self._icon_mirrored:
+            return
+        self._icon_mirrored = mirrored
+        self.app.setWindowIcon(build_icon(mirrored))
 
     # --- menu -------------------------------------------------------------
 
@@ -331,6 +430,9 @@ class Orb(QWidget):
         self._press_global = None
         if moved:
             self._save_position()
+            # Dragging across the middle of the screen flips which way the
+            # capsule will open, so the icon has to follow.
+            self._refresh_icon()
         else:
             self._fire_toggle()
 
@@ -382,6 +484,7 @@ class Orb(QWidget):
             # Pick the side now, while still closed, so the choice reflects
             # wherever the dot has been dragged since the last dictation.
             self._grow_left = self._choose_direction()
+            self._refresh_icon()   # in case the screen layout moved under us
             # Start the meter from the mark's own shape, not from silence.
             # After choosing the side, since the order depends on it.
             self._history.clear()
