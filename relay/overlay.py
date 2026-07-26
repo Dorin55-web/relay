@@ -36,9 +36,11 @@ DOT_R_OPEN = 6.0         # the dot shrinks once the live bars take over
 GLOW_R = 21.0            # halo scales with the dot, or it looks crowded
 
 # The icon's mark, as fractions of the tile, so the thing floating on screen and
-# the thing in the taskbar are the same drawing at two sizes.
-ICON_INSET = 0.03
-ICON_RADIUS = 0.23
+# the thing in the taskbar are the same drawing. The taskbar gets it on a square
+# tile because that is what app icons are; on screen it sits in a circle, which
+# is why the mark is shrunk a little - the corners of its bounding box would
+# otherwise run into the curve.
+MARK_SCALE = 0.86
 ICON_DOT_X = 0.252
 ICON_DOT_R = 0.108
 ICON_BAR_FIRST = 0.472
@@ -398,7 +400,7 @@ class Orb(QWidget):
         cx, cy = self._mark_dot_center()
         self._paint_glow(painter, accent, cx, cy)
 
-        idle_r = DOT_BOX * ICON_DOT_R
+        idle_r = DOT_BOX * ICON_DOT_R * MARK_SCALE
         radius = idle_r + (DOT_R_OPEN - idle_r) * self._open
         painter.setPen(Qt.NoPen)
         painter.setBrush(accent)
@@ -406,30 +408,32 @@ class Orb(QWidget):
         painter.end()
 
     def _mark_dot_center(self):
-        """Where the dot sits: inside the icon when idle, at the capsule's end
+        """Where the dot sits: inside the mark when idle, at the capsule's end
         once it opens. Interpolated, so it slides rather than jumps."""
         _, cy = self._dot_center()
-        tile_left = self._tile_left()
-        idle_x = tile_left + DOT_BOX * ICON_DOT_X
+        idle_x = self._mark_x(ICON_DOT_X)
         open_x, _ = self._dot_center()
         return idle_x + (open_x - idle_x) * self._open, cy
 
     def _tile_left(self):
         return SHADOW_PAD + (self._visible_width() - DOT_BOX if self._grow_left else 0)
 
+    def _mark_x(self, fraction):
+        """An icon fraction placed in the circle, shrunk about its centre."""
+        return self._tile_left() + DOT_BOX * (0.5 + (fraction - 0.5) * MARK_SCALE)
+
     def _paint_icon_bars(self, painter, accent):
         """The icon's three static bars, for the resting state."""
         fade = int(255 * min(1.0, (0.5 - self._open) * 2))
         if fade <= 0:
             return
-        left = self._tile_left()
         _, cy = self._dot_center()
         for i, height in enumerate(ICON_BAR_H):
-            x = left + DOT_BOX * (ICON_BAR_FIRST + i * ICON_BAR_STEP)
-            half = DOT_BOX * height / 2
+            x = self._mark_x(ICON_BAR_FIRST + i * ICON_BAR_STEP)
+            half = DOT_BOX * height * MARK_SCALE / 2
             colour = QColor(accent)
             colour.setAlpha(int((255 if i == 1 else 200) * fade / 255))
-            painter.setPen(QPen(colour, DOT_BOX * ICON_BAR_W,
+            painter.setPen(QPen(colour, DOT_BOX * ICON_BAR_W * MARK_SCALE,
                                 Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
 
@@ -439,10 +443,9 @@ class Orb(QWidget):
             float(SHADOW_PAD), float(SHADOW_PAD),
             self._visible_width(), float(CAPSULE_H),
         )
-        # Rounded square at rest, full pill once open: the corner travels with
-        # the width, so the icon unrolls into the meter instead of morphing.
-        idle_radius = DOT_BOX * ICON_RADIUS
-        radius = idle_radius + (CAPSULE_H / 2 - idle_radius) * self._open
+        # Fully round at every width: a circle at rest, and the same curve
+        # carried along as it stretches into a pill.
+        radius = CAPSULE_H / 2
 
         # Cheap drop shadow: a few offset rounded rects at low alpha. Qt's
         # graphics effect would need a second render pass for the same look.
