@@ -88,8 +88,18 @@ small dot floating above your other windows.
 Text appears as you speak, phrase by phrase. Nothing is submitted for you —
 press Enter yourself when you are happy with it.
 
-**The dot** can be dragged anywhere; its position is remembered. The capsule
-opens towards whichever side of the screen has room.
+**The dot** can be dragged anywhere; its position is remembered.
+
+It carries the same mark as the icon in your taskbar — a dot with three bars —
+and that mark faces the way the capsule is about to open. The capsule grows
+towards whichever side of the screen has room, and the dot itself stays put
+while it does, so near the right edge it opens leftwards with the dot at the
+right end. Drag it across the middle of the screen and the mark turns around,
+along with the taskbar icon.
+
+Starting and stopping is one movement rather than a swap: the three bars of the
+mark fan out into the eight of the level meter and gather back in, over about a
+quarter of a second, eased at both ends.
 
 ---
 
@@ -201,7 +211,7 @@ It is downloading the 1.5 GB model. This happens once.
 ## Project layout
 
 ```
-assets/relay.ico         the app icon, 16px to 256px
+assets/relay.ico         the icon the shortcuts point at, 16px to 256px
 relay/
 ├── __main__.py          entry point, state machine, worker threads
 ├── cuda_setup.py        registers the pip-installed CUDA DLLs (must run first)
@@ -219,7 +229,12 @@ relay/
 └── single_instance.py   refuses to start twice
 ```
 
-### Three things that are less obvious than they look
+The icon in the taskbar is drawn at run time rather than loaded from that file,
+from the same fractions as the dot on screen, so the two always face the same
+way. The file is only for the shortcuts — a `.lnk` resolves its icon once and
+cannot follow anything.
+
+### Six things that are less obvious than they look
 
 **CUDA DLLs on Windows.** Since Python 3.8, `PATH` is ignored when resolving DLL
 dependencies of extension modules. The pip `nvidia-*` wheels put cuBLAS and cuDNN
@@ -241,6 +256,21 @@ the process's application id, and without one of its own everything here files
 under the Python interpreter hosting it — showing Python's icon no matter what
 `setWindowIcon` says. `SetCurrentProcessExplicitAppUserModelID`, before the first
 window exists, is what makes the button the program's own.
+
+**Closing a window can close the program.** Qt quits once the last *primary*
+window closes, and a `Qt.Tool` window — which the dot is — does not count as
+one. Nothing else here opened an ordinary window, so the rule never fired until
+the prompt editor did: closing it, including the close that follows a save, took
+the whole program down and the dot disappeared for good.
+`setQuitOnLastWindowClosed(False)` is the fix.
+
+**A cross-fade between two drawings has a hole in the middle.** The mark's three
+bars used to fade out over the first half of the capsule opening while the
+meter's eight faded in over the second — alphas of `(0.5 - open) * 2` and
+`(open - 0.5) * 2`, which are *both zero* at exactly half. Every start and stop
+passed through a frame with no bars at all. They are one set of bars now, each
+travelling between where the mark puts it and where the meter does, so the row is
+never empty and the mark unrolls instead of being swapped.
 
 ---
 
