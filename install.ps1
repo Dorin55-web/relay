@@ -27,14 +27,21 @@ if (-not (Test-Path $pythonw)) {
     exit 1
 }
 
+# Falls back to a stock shell icon only if the bundled one has gone missing.
+$icon = Join-Path $proj "assets\relay.ico"
+if (-not (Test-Path $icon)) {
+    $icon = "$env:SystemRoot\System32\SHELL32.dll,138"
+    Write-Warning "assets\relay.ico not found; shortcuts will use a stock icon"
+}
+
 # pythonw.exe is the console-less twin of python.exe: no window, ever.
-function New-Shortcut($path, $target, $cmdArgs, $desc, $iconIndex) {
+function New-Shortcut($path, $target, $cmdArgs, $desc) {
     $sc = $shell.CreateShortcut($path)
     $sc.TargetPath       = $target
     $sc.Arguments        = [string]$cmdArgs
     $sc.WorkingDirectory = $proj
     $sc.Description      = $desc
-    $sc.IconLocation     = "$env:SystemRoot\System32\SHELL32.dll,$iconIndex"
+    $sc.IconLocation     = $icon
     $sc.WindowStyle      = 7          # minimised, belt-and-braces with pythonw
     $sc.Save()
     Write-Output "  $path"
@@ -42,11 +49,11 @@ function New-Shortcut($path, $target, $cmdArgs, $desc, $iconIndex) {
 
 Write-Output "Shortcuts:"
 New-Shortcut (Join-Path $desktop "Relay.lnk") $pythonw "-m relay" `
-    "Dictate RO -> EN prompt (F9 or click the dot)" 138
+    "Dictate RO -> EN prompt (F9 or click the dot)"
 New-Shortcut (Join-Path $desktop "Relay - Mic Test.lnk") $runbat "--mic-test" `
-    "Check which microphone has signal" 23
+    "Check which microphone has signal"
 New-Shortcut $autostart $pythonw "-m relay" `
-    "Relay at Windows start-up" 138
+    "Relay at Windows start-up"
 
 Write-Output ""
 Write-Output "Auto-start installed. Remove it with:  .\install.ps1 -Remove"

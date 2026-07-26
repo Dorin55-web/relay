@@ -19,12 +19,13 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
-from PySide6.QtGui import (QAction, QColor, QPainter, QPainterPath, QPen,
-                           QRadialGradient)
+from PySide6.QtGui import (QAction, QColor, QIcon, QPainter, QPainterPath,
+                           QPen, QRadialGradient)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
+ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
 DOT_BOX = 40             # visible size of the collapsed dot area
 CAPSULE_W = 84           # visible width when open
@@ -90,6 +91,8 @@ class Orb(QWidget):
         # which the dot is - does not count as one. Without this, closing the
         # prompt editor takes the whole app down with it and the dot vanishes.
         self.app.setQuitOnLastWindowClosed(False)
+        if ICON_PATH.is_file():
+            self.app.setWindowIcon(QIcon(str(ICON_PATH)))
         super().__init__()
 
         self.on_toggle = on_toggle

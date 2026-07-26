@@ -10,6 +10,7 @@ setup_output()
 enable_cuda_dlls()
 
 import argparse  # noqa: E402
+import ctypes  # noqa: E402
 import queue  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
@@ -24,6 +25,21 @@ from .injector import paste_text, restore_clipboard, save_clipboard  # noqa: E40
 from . import prompts as prompts_mod  # noqa: E402
 
 IDLE, RECORDING, PROCESSING = "idle", "recording", "processing"
+
+# Windows groups taskbar buttons by the process's application id. Without one of
+# our own, everything here is filed under the python interpreter that happens to
+# be hosting it, and the taskbar shows Python's icon whatever the window icon
+# says. Must be set before the first window exists.
+APP_ID = "Relay.VoicePrompt"
+
+
+def set_app_id():
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception as exc:
+        print(f"[app] could not set the taskbar identity: {exc}")
 
 
 def parse_hotkey(name):
@@ -480,6 +496,7 @@ def main(argv=None):
         return 1
 
     print(f"\n=== relay started {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    set_app_id()
     VoicePrompt(config).run(show_ui=not args.no_ui)
     return 0
 

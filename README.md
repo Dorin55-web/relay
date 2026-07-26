@@ -201,6 +201,7 @@ It is downloading the 1.5 GB model. This happens once.
 ## Project layout
 
 ```
+assets/relay.ico         the app icon, 16px to 256px
 relay/
 ├── __main__.py          entry point, state machine, worker threads
 ├── cuda_setup.py        registers the pip-installed CUDA DLLs (must run first)
@@ -234,6 +235,12 @@ request and a separate thread does the work.
 **The dot must not take focus.** `WS_EX_NOACTIVATE` stops clicking it from
 becoming the foreground window. Without that, the simulated `Ctrl+V` lands on the
 dot instead of the box you were aiming at, and the text goes nowhere.
+
+**The taskbar icon is not the window icon.** Windows groups taskbar buttons by
+the process's application id, and without one of its own everything here files
+under the Python interpreter hosting it — showing Python's icon no matter what
+`setWindowIcon` says. `SetCurrentProcessExplicitAppUserModelID`, before the first
+window exists, is what makes the button the program's own.
 
 ---
 
