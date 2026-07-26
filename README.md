@@ -88,8 +88,35 @@ small dot floating above your other windows.
 Text appears as you speak, phrase by phrase. Nothing is submitted for you —
 press Enter yourself when you are happy with it.
 
-**The dot** can be dragged anywhere; its position is remembered. Right-click it
-for `Quit`. The capsule opens towards whichever side of the screen has room.
+**The dot** can be dragged anywhere; its position is remembered. The capsule
+opens towards whichever side of the screen has room.
+
+---
+
+## Prompt templates
+
+Right-click the dot. Ten scaffolds you reach for constantly, numbered and
+grouped by the kind of work they start:
+
+| | |
+|---|---|
+| 1–2 | **Diagnose** — find the cause before touching anything |
+| 3–4 | **Review** — read the code, report what is there |
+| 5–6 | **Plan** — decide the approach before writing any of it |
+| 7–8 | **Build** — implement and fix |
+| 9–10 | **Check** — test, and hand off to the next session |
+
+Click one and it goes straight into the box you last typed in — the same target
+dictation uses, so no clicking around first. Hover to see the whole prompt
+before you commit to it.
+
+Each is a skeleton with `<angle brackets>` where your specifics go. Inserting
+one never presses Enter, even with `auto_enter` on: the blanks are still in it.
+
+**They are yours to rewrite.** `Edit prompts...` opens `prompts.json`; save it
+and the next right-click shows your version, with no restart. Ten is the limit —
+past that a right-click menu stops being faster than typing. If the file ends up
+unreadable the built-in set comes back, so you cannot lock yourself out.
 
 **The target sticks.** Once you have clicked into a text box, every dictation
 goes there — even if you Alt+Tab away, or a notification steals focus. It only
@@ -101,7 +128,7 @@ resized, or reflowed.
 
 ## Configuration
 
-Everything lives in `config.json`.
+Settings live in `config.json`, the right-click templates in `prompts.json`.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -175,6 +202,7 @@ relay/
 ├── audio.py             capture, device tracking, VAD phrase segmentation
 ├── transcriber.py       Whisper loading, warm-up, translation
 ├── injector.py          clipboard save → set → Ctrl+V → restore
+├── prompts.py           the right-click template library, over prompts.json
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating dot and level meter (PySide6)

@@ -47,7 +47,7 @@ def restore_clipboard(original, config):
         pass
 
 
-def paste_text(text, config, manage_clipboard=True, target_hwnd=None):
+def paste_text(text, config, manage_clipboard=True, target_hwnd=None, submit=None):
     """Put `text` in the focused input.
 
     Sequence matters: the clipboard must still hold our text when the target app
@@ -57,6 +57,10 @@ def paste_text(text, config, manage_clipboard=True, target_hwnd=None):
     When streaming, phrases arrive every couple of seconds and the caller
     handles the clipboard once per session, so pass manage_clipboard=False -
     otherwise every phrase would pay the restore delay.
+
+    `submit` overrides config.auto_enter for one paste. Prompt templates arrive
+    with `<blanks>` still in them, so sending Enter would fire off a half-written
+    prompt even for someone who wants auto_enter on their dictation.
     """
     if not text:
         return False
@@ -94,7 +98,7 @@ def paste_text(text, config, manage_clipboard=True, target_hwnd=None):
         print(f"[paste] could not send Ctrl+V: {exc}")
         return False
 
-    if config.auto_enter:
+    if config.auto_enter if submit is None else submit:
         time.sleep(0.05)
         _keyboard.press(Key.enter)
         _keyboard.release(Key.enter)

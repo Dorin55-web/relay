@@ -1,0 +1,54 @@
+{
+  "prompts": [
+    {
+      "section": "Diagnose",
+      "label": "Pinpoint the cause",
+      "text": "I need you to review this in complete depth and pinpoint the exact cause of <problem>. Do not fix anything yet."
+    },
+    {
+      "section": "Diagnose",
+      "label": "Deep dive, several agents",
+      "text": "I need you to launch <3> deep dive agents and review what is causing <problem>. Review this in complete depth and pinpoint the exact cause."
+    },
+    {
+      "section": "Review",
+      "label": "Complete review of an area",
+      "text": "I need you to do a complete review of <area> and identify <what you are looking for>, and then create a structured plan for improvements respectively."
+    },
+    {
+      "section": "Review",
+      "label": "Find dead code and duplication",
+      "text": "I need you to do an in-depth review and identify any dead code, duplication and leftover scaffolding, and output all of your findings in a readme file."
+    },
+    {
+      "section": "Plan",
+      "label": "Structured plan, no code",
+      "text": "Would you review this in complete depth and then create a structured plan to <goal>. Do not write any code yet."
+    },
+    {
+      "section": "Plan",
+      "label": "Options and trade-offs",
+      "text": "Would you think through how we could approach <problem>, and give me the trade-offs of each option before we pick one."
+    },
+    {
+      "section": "Build",
+      "label": "Implement a feature",
+      "text": "I need you to build <feature> and <design requirement> respectively, following the conventions already in this codebase."
+    },
+    {
+      "section": "Build",
+      "label": "Fix and update accordingly",
+      "text": "Would you review this and update the code accordingly to fix <problem>, and then check that nothing else depended on the old behaviour."
+    },
+    {
+      "section": "Check",
+      "label": "Test and verify",
+      "text": "I need you to test <what> and verify that <condition> holds, and then report what you actually ran and what it returned."
+    },
+    {
+      "section": "Check",
+      "label": "Recap for a hand-off",
+      "text": "Would you recap what was done in this conversation, and output your findings in a readme file so another session can pick it up."
+    }
+  ]
+}

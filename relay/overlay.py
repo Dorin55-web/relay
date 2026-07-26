@@ -83,12 +83,18 @@ def _blend(a, b, t):
 
 
 class Orb(QWidget):
-    def __init__(self, on_toggle, on_quit, tooltip="F9"):
+    def __init__(self, on_toggle, on_quit, tooltip="F9",
+                 prompts_getter=None, on_prompt=None, on_edit_prompts=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
         super().__init__()
 
         self.on_toggle = on_toggle
         self.on_quit = on_quit
+        self.on_prompt = on_prompt
+        self.on_edit_prompts = on_edit_prompts
+        self.menu = None
+        self._hotkey_label = tooltip
+        self._prompts_getter = prompts_getter or (lambda: [])
 
         self.state = "idle"
         self.level_getter = lambda: 0.0
@@ -118,18 +124,69 @@ class Orb(QWidget):
         self.show()
         _make_non_activating(self)
 
-        self.menu = QMenu(self)
-        act = QAction(f"Dictate  ({tooltip})", self)
-        act.triggered.connect(self._fire_toggle)
-        quit_act = QAction("Quit", self)
-        quit_act.triggered.connect(self.quit)
-        self.menu.addAction(act)
-        self.menu.addSeparator()
-        self.menu.addAction(quit_act)
+        self._build_menu(tooltip, self._current_prompts())
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(FRAME_MS)
+
+    # --- menu -------------------------------------------------------------
+
+    def _current_prompts(self):
+        """Never let a broken prompt file stop the menu from opening."""
+        try:
+            return list(self._prompts_getter() or [])
+        except Exception as exc:
+            print(f"[orb] could not read the prompts: {exc}")
+            return []
+
+    def _build_menu(self, tooltip, prompts):
+        """Prompts first, then the two things the dot itself does.
+
+        The templates are numbered and grouped by the kind of work they start,
+        so the one you want is found by position rather than by reading ten
+        similar sentences. Hovering shows the whole prompt: the labels are short
+        enough to scan, which means they are too short to be unambiguous.
+
+        Rebuilt on every right-click rather than once at startup, so editing
+        prompts.json takes effect at the next click instead of the next launch.
+        clear() deletes the old actions, so this does not leak one menu per use.
+        """
+        if getattr(self, "menu", None) is None:
+            self.menu = QMenu(self)
+            self.menu.setToolTipsVisible(True)
+        else:
+            self.menu.clear()
+
+        section = None
+        for i, prompt in enumerate(prompts, start=1):
+            if prompt["section"] and prompt["section"] != section:
+                section = prompt["section"]
+                self.menu.addSection(section)
+            act = QAction(f"{i}.  {prompt['label']}", self)
+            act.setToolTip(prompt["text"])
+            # Default arguments, not closure capture: every lambda in this loop
+            # would otherwise see the last prompt in the list.
+            act.triggered.connect(
+                lambda checked=False, text=prompt["text"]: self._fire_prompt(text)
+            )
+            self.menu.addAction(act)
+
+        if prompts:
+            self.menu.addSeparator()
+            edit_act = QAction("Edit prompts...", self)
+            edit_act.triggered.connect(self._fire_edit_prompts)
+            self.menu.addAction(edit_act)
+
+        self.menu.addSeparator()
+        dictate_act = QAction(f"Dictate  ({tooltip})", self)
+        dictate_act.triggered.connect(self._fire_toggle)
+        self.menu.addAction(dictate_act)
+
+        self.menu.addSeparator()
+        quit_act = QAction("Quit", self)
+        quit_act.triggered.connect(self.quit)
+        self.menu.addAction(quit_act)
 
     # --- position ---------------------------------------------------------
 
@@ -207,6 +264,7 @@ class Orb(QWidget):
             self._press_global = event.globalPosition().toPoint()
             self._press_origin = QPoint(self.anchor_x, self.anchor_y)
         elif event.button() == Qt.RightButton:
+            self._build_menu(self._hotkey_label, self._current_prompts())
             self.menu.popup(event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event):
@@ -233,6 +291,22 @@ class Orb(QWidget):
             self.on_toggle()
         except Exception:
             pass
+
+    def _fire_prompt(self, text):
+        if self.on_prompt is None:
+            return
+        try:
+            self.on_prompt(text)
+        except Exception as exc:
+            print(f"[orb] could not insert prompt: {exc}")
+
+    def _fire_edit_prompts(self):
+        if self.on_edit_prompts is None:
+            return
+        try:
+            self.on_edit_prompts()
+        except Exception as exc:
+            print(f"[orb] could not open the prompt file: {exc}")
 
     # --- state, called from worker threads --------------------------------
 

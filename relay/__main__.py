@@ -21,6 +21,7 @@ from . import audio as audio_mod  # noqa: E402
 from .config import load_config, write_default_config  # noqa: E402
 from .feedback import Feedback  # noqa: E402
 from .injector import paste_text, restore_clipboard, save_clipboard  # noqa: E402
+from . import prompts as prompts_mod  # noqa: E402
 
 IDLE, RECORDING, PROCESSING = "idle", "recording", "processing"
 
@@ -260,6 +261,44 @@ class VoicePrompt:
             if self.orb:
                 self.orb.flash("error")
 
+    # --- prompt templates -------------------------------------------------
+
+    def insert_prompt(self, text):
+        """Paste a template from the orb's menu into the box you last typed in.
+
+        Dispatched to its own thread because paste_text sleeps through the
+        clipboard round-trip, and the caller is the Qt menu - the same thread
+        that paints the orb.
+        """
+        threading.Thread(
+            target=self._insert_prompt, args=(text,), daemon=True
+        ).start()
+
+    def _insert_prompt(self, text):
+        # A menu is a real window and takes the foreground when it opens. Let Qt
+        # finish tearing the popup down first: hand focus back too early and the
+        # closing menu takes it straight off the window we just restored.
+        time.sleep(0.12)
+
+        target = None
+        if self.tracker is not None:
+            target = self.tracker.current()
+            if target:
+                print(f"[prompt] writing into: {self.tracker.title}")
+                self.tracker.restore()
+                if self.config.restore_caret:
+                    self.tracker.restore_caret()
+
+        try:
+            # submit=False whatever auto_enter says: a template still has its
+            # <blanks> in it, and Enter would send it half-written.
+            if paste_text(text, self.config, target_hwnd=target, submit=False):
+                self.feedback.success(text)
+            else:
+                self.feedback.error(f"could not insert prompt: {text}")
+        except Exception as exc:
+            self.feedback.error(f"could not insert prompt: {exc}")
+
     # --- startup ---------------------------------------------------------
 
     def _load_engine(self):
@@ -311,7 +350,8 @@ class VoicePrompt:
         print("\n" + "=" * 62)
         print(f"  Press {hotkey_label} to start, {hotkey_label} again to stop.")
         if show_ui:
-            print("  Or click the orb. Drag to move it, right-click to quit.")
+            print("  Or click the orb. Drag to move it.")
+            print("  Right-click it for the prompt templates, and to quit.")
         print(f"  Speak Romanian -> {target} text is pasted where your cursor is.")
         if self.streaming:
             print("  Live: each phrase is pasted when you pause, as you speak.")
@@ -332,8 +372,16 @@ class VoicePrompt:
 
         from .overlay import Orb
 
+        prompts_mod.ensure_file()
         self.orb = Orb(
-            on_toggle=self.request_toggle, on_quit=self.shutdown, tooltip=hotkey_label
+            on_toggle=self.request_toggle,
+            on_quit=self.shutdown,
+            tooltip=hotkey_label,
+            # Passed as a callable, not a list: the menu re-reads prompts.json
+            # each time it opens, so an edit lands without a restart.
+            prompts_getter=prompts_mod.load,
+            on_prompt=self.insert_prompt,
+            on_edit_prompts=prompts_mod.open_for_editing,
         )
         self.orb.level_getter = lambda: self.recorder.level
         self.orb.set_state(PROCESSING)  # spinner until the model is loaded
