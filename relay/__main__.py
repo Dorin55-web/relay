@@ -299,6 +299,18 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not insert prompt: {exc}")
 
+    def edit_prompts(self):
+        """Open the editor window. Called from the menu, so already on the GUI thread."""
+        from .prompt_editor import open_editor
+
+        try:
+            open_editor()
+        except Exception as exc:
+            # Rather than leave the menu item doing nothing, fall back to the
+            # file itself - editable, just less forgiving about commas.
+            self.feedback.error(f"could not open the prompt editor: {exc}")
+            prompts_mod.open_for_editing()
+
     # --- startup ---------------------------------------------------------
 
     def _load_engine(self):
@@ -381,7 +393,7 @@ class VoicePrompt:
             # each time it opens, so an edit lands without a restart.
             prompts_getter=prompts_mod.load,
             on_prompt=self.insert_prompt,
-            on_edit_prompts=prompts_mod.open_for_editing,
+            on_edit_prompts=self.edit_prompts,
         )
         self.orb.level_getter = lambda: self.recorder.level
         self.orb.set_state(PROCESSING)  # spinner until the model is loaded

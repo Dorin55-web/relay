@@ -152,8 +152,39 @@ def ensure_file(path=None):
     return prompts_path
 
 
+def save(entries, path=None):
+    """Write the list back to prompts.json. True when it actually landed.
+
+    Writes to a neighbouring temp file and replaces the original, so a failure
+    part way through leaves the previous prompts intact rather than a truncated
+    file that loads as the defaults.
+    """
+    prompts_path = Path(path) if path else PROMPTS_PATH
+    cleaned = _clean(entries)
+    if not cleaned:
+        print("[prompts] refusing to save an empty list")
+        return False
+
+    temp_path = prompts_path.with_suffix(".json.tmp")
+    try:
+        temp_path.write_text(
+            json.dumps({"prompts": cleaned}, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temp_path, prompts_path)
+        print(f"[prompts] saved {len(cleaned)} prompts")
+        return True
+    except OSError as exc:
+        print(f"[prompts] could not save {prompts_path.name}: {exc}")
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 def open_for_editing(path=None):
-    """Open prompts.json in whatever the system uses for .json files."""
+    """Fallback for when the editor window cannot be shown."""
     prompts_path = ensure_file(path)
     try:
         if sys.platform == "win32":

@@ -113,10 +113,16 @@ before you commit to it.
 Each is a skeleton with `<angle brackets>` where your specifics go. Inserting
 one never presses Enter, even with `auto_enter` on: the blanks are still in it.
 
-**They are yours to rewrite.** `Edit prompts...` opens `prompts.json`; save it
-and the next right-click shows your version, with no restart. Ten is the limit —
-past that a right-click menu stops being faster than typing. If the file ends up
-unreadable the built-in set comes back, so you cannot lock yourself out.
+**They are yours to rewrite.** `Edit prompts...` opens an editor: pick one on the
+left, change its group, name and text on the right, reorder with the arrows.
+Save and the next right-click shows your version — no restart.
+
+The numbers are the point, so the editor keeps ten of them on screen without
+scrolling and caps the list there; past ten, a right-click menu stops being
+faster than typing. Prompts are stored in `prompts.json`, written through a
+temporary file so an interrupted save cannot leave you with half of one. Edit
+that file by hand if you prefer — if it ever ends up unreadable the built-in set
+comes back, so you cannot lock yourself out of the menu.
 
 **The target sticks.** Once you have clicked into a text box, every dictation
 goes there — even if you Alt+Tab away, or a notification steals focus. It only
@@ -203,6 +209,7 @@ relay/
 ├── transcriber.py       Whisper loading, warm-up, translation
 ├── injector.py          clipboard save → set → Ctrl+V → restore
 ├── prompts.py           the right-click template library, over prompts.json
+├── prompt_editor.py     the window that edits it
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating dot and level meter (PySide6)
