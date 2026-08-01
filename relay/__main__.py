@@ -369,6 +369,14 @@ class VoicePrompt:
                 self.recorder.stop()
             except Exception:
                 pass
+        # Hand the audio stack back explicitly rather than leaving it to the
+        # interpreter's exit hooks. A Bluetooth headset only returns to stereo
+        # once everything holding its hands-free profile has let go, and a
+        # half-torn-down PortAudio is exactly what stops that happening.
+        try:
+            audio_mod.sd._terminate()
+        except Exception as exc:
+            print(f"[audio] could not release the audio stack: {exc}")
         print("Stopped.\n")
 
     def run(self, show_ui=True):

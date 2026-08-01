@@ -20,6 +20,12 @@ DEFAULTS = {
     "beam_size": 1,
     # --- audio ---
     "input_device": None,            # null = follow the current Windows default
+    # A Bluetooth headset carries its mic on the hands-free profile, which
+    # cannot run at the same time as the stereo one. Opening it tears down your
+    # music, and the renegotiation back is what leaves the headset dead. That
+    # mic is 8-16 kHz mono anyway, against 48 kHz for a built-in array, so
+    # avoiding it is better for Whisper as well. Set false to use it regardless.
+    "avoid_bluetooth_mic": True,
     "sample_rate": 16000,            # Whisper's native rate
     "max_recording_seconds": 120,
     "min_recording_seconds": 0.3,

@@ -160,6 +160,7 @@ Settings live in `config.json`, the right-click templates in `prompts.json`.
 | `remember_target` | `true` | Keep pasting into the last box you clicked. |
 | `restore_caret` | `true` | Put the cursor back in that box automatically. |
 | `input_device` | `null` | `null` follows the Windows default. |
+| `avoid_bluetooth_mic` | `true` | Step around a headset's mic when another one exists. |
 
 > **Do not use `large-v3-turbo`.** It is roughly 4x faster, but OpenAI distilled
 > it on transcription only and documents that it is not trained for the
@@ -198,6 +199,24 @@ Recording → Levels. A working mic in a quiet room reads about `0.0005` or abov
 **Text goes to the wrong place, or nowhere.**
 Click once into the target text box. The log line `[paste] target window:` shows
 where it actually landed.
+
+**My Bluetooth headset goes silent, and its mic stops working.**
+A Bluetooth headset cannot carry its microphone and stereo audio at the same
+time. The mic lives on the hands-free profile, and opening it tears the stereo
+one down — your music stops. Windows renegotiates when the mic closes, and when
+that renegotiation fails the headset is left holding neither: no sound, no mic.
+
+Relay steps around this by default. If your default input is a headset mic and
+there is any other microphone, it records from that one and the headset never
+leaves stereo. The log says so when it happens. Set `avoid_bluetooth_mic` to
+`false` to use the headset mic anyway.
+
+You lose nothing by it. That mic runs at 8–16 kHz mono, against 48 kHz on a
+typical built-in array, so the laptop microphone is the better input for Whisper
+as well as the one that leaves your audio alone.
+
+If a headset is already stuck, turn it off and on again, or toggle Bluetooth —
+Windows renegotiates from scratch.
 
 **Nothing works in an app running as Administrator.**
 Windows blocks a normal process from sending input to an elevated window. Run

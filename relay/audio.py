@@ -32,6 +32,48 @@ def current_input_device():
     return index, info
 
 
+# Windows names the hands-free capture endpoint "Headset (<device>)" through
+# MME, DirectSound and WASAPI, and exposes the raw one through bthhfenum.sys.
+# The same headset's stereo output is named after the device itself.
+HANDSFREE_MARKERS = ("hands-free", "handsfree", "bthhfenum")
+
+# Windows' own routing entries. They are not hardware: each forwards to
+# whatever the current default input is, so choosing one to step around the
+# default lands straight back on it.
+MAPPER_MARKERS = ("sound mapper", "primary sound capture")
+
+# Most compatible first. WDM-KS is last on purpose: some of its endpoints hand
+# back raw bytes that reinterpret as enormous floats rather than audio.
+HOST_API_ORDER = ("mme", "windows wasapi", "windows directsound", "windows wdm-ks")
+
+
+def is_handsfree(name):
+    """Is this endpoint a Bluetooth headset's mic rather than a real input?
+
+    Opening one forces the radio off the stereo profile: your music stops, and
+    the switch back is what can leave the headset with neither profile and no
+    sound at all.
+    """
+    lowered = (name or "").strip().lower()
+    if any(marker in lowered for marker in HANDSFREE_MARKERS):
+        return True
+    return lowered.startswith("headset")
+
+
+def is_mapper(name):
+    """Windows' routing pseudo-devices, which follow the default input."""
+    lowered = (name or "").strip().lower()
+    return any(marker in lowered for marker in MAPPER_MARKERS)
+
+
+def _host_rank(device_info):
+    try:
+        name = sd.query_hostapis(device_info["hostapi"])["name"].strip().lower()
+    except Exception:
+        return len(HOST_API_ORDER)
+    return HOST_API_ORDER.index(name) if name in HOST_API_ORDER else len(HOST_API_ORDER)
+
+
 def list_devices():
     """Print all input devices, marking the current default."""
     refresh_devices()
@@ -233,7 +275,18 @@ class AudioRecorder:
                 self._stream_rate = rate
                 if device is not None and device != device_index:
                     self.device_name = sd.query_devices(device, "input")["name"]
-                    print(f"[audio] fell back to [{device}] {self.device_name} @ {rate} Hz")
+                    if (self.config.avoid_bluetooth_mic
+                            and is_handsfree(device_info["name"])
+                            and not is_handsfree(self.device_name)):
+                        # Say why, or this looks like the wrong microphone.
+                        print(f"[audio] {device_info['name']!r} is a Bluetooth "
+                              f"headset mic; using it would cut the headset's "
+                              f"audio. Recording from [{device}] "
+                              f"{self.device_name} @ {rate} Hz instead "
+                              f"(avoid_bluetooth_mic).")
+                    else:
+                        print(f"[audio] fell back to [{device}] "
+                              f"{self.device_name} @ {rate} Hz")
                 elif device is None:
                     self.device_name = f"system default @ {rate} Hz"
                     print(f"[audio] fell back to the system mapper @ {rate} Hz")
@@ -265,6 +318,12 @@ class AudioRecorder:
             info = sd.query_devices(configured, "input")
             pairs += [(configured, target), (configured, int(info["default_samplerate"]))]
         else:
+            # Step aside from a Bluetooth headset's mic when there is anything
+            # else to record from: it costs you the music and can wedge the
+            # headset, and it is 8-16 kHz mono into the bargain.
+            if self.config.avoid_bluetooth_mic and is_handsfree(device_info["name"]):
+                pairs += self._wired_candidates(target)
+
             pairs += [(device_index, target), (device_index, native)]
             # The same hardware exposed through DirectSound or WASAPI.
             name = device_info["name"].strip().lower()
@@ -282,6 +341,29 @@ class AudioRecorder:
                 seen.add(pair)
                 unique.append(pair)
         return unique
+
+    def _wired_candidates(self, target):
+        """Every input that is not a Bluetooth headset mic, best host API first.
+
+        Only a preference, never a veto: these go in front of the Windows
+        default, and the default still follows. Plug in nothing else and the
+        headset mic is still what you dictate through.
+        """
+        wired = [
+            (idx, dev)
+            for idx, dev in enumerate(sd.query_devices())
+            if dev["max_input_channels"] >= 1
+            and not is_handsfree(dev["name"])
+            # A mapper is not hands-free by name but forwards to the default,
+            # which is the headset - picking one would defeat the whole point.
+            and not is_mapper(dev["name"])
+        ]
+        wired.sort(key=lambda item: _host_rank(item[1]))
+
+        pairs = []
+        for idx, dev in wired:
+            pairs += [(idx, target), (idx, int(dev["default_samplerate"]))]
+        return pairs
 
     def stop(self):
         """Stop capturing and return mono float32 audio at the configured rate.
