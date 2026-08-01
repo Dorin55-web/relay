@@ -204,7 +204,8 @@ def _blend(a, b, t):
 
 class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
-                 prompts_getter=None, on_prompt=None, on_edit_prompts=None):
+                 prompts_getter=None, on_prompt=None, on_edit_prompts=None,
+                 on_compose=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
         # Qt quits once the last primary window closes, and a Qt.Tool window -
         # which the dot is - does not count as one. Without this, closing the
@@ -218,6 +219,7 @@ class Orb(QWidget):
         self.on_quit = on_quit
         self.on_prompt = on_prompt
         self.on_edit_prompts = on_edit_prompts
+        self.on_compose = on_compose
         self.menu = None
         self._hotkey_label = tooltip
         self._prompts_getter = prompts_getter or (lambda: [])
@@ -329,6 +331,14 @@ class Orb(QWidget):
         dictate_act = QAction(f"Dictate  ({tooltip})", self)
         dictate_act.triggered.connect(self._fire_toggle)
         self.menu.addAction(dictate_act)
+
+        if self.on_compose is not None:
+            write_act = QAction("Write instead...", self)
+            write_act.setToolTip(
+                "Type Romanian and send the English where you were writing"
+            )
+            write_act.triggered.connect(self._fire_compose)
+            self.menu.addAction(write_act)
 
         self.menu.addSeparator()
         quit_act = QAction("Quit", self)
@@ -449,6 +459,14 @@ class Orb(QWidget):
             self.on_prompt(text)
         except Exception as exc:
             print(f"[orb] could not insert prompt: {exc}")
+
+    def _fire_compose(self):
+        if self.on_compose is None:
+            return
+        try:
+            self.on_compose()
+        except Exception as exc:
+            print(f"[orb] could not open the write window: {exc}")
 
     def _fire_edit_prompts(self):
         if self.on_edit_prompts is None:

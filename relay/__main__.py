@@ -74,6 +74,9 @@ class VoicePrompt:
         self._session_clipboard = None
         self._pasted_any = False
         self.tracker = None
+        # Built the first time the write window is opened; most sessions
+        # only ever dictate and never need the text model in memory.
+        self.text_translator = None
         # Pinned when a dictation starts, so phrases keep going to the window
         # you were writing in even if focus wanders mid-sentence.
         self._target_hwnd = None
@@ -315,6 +318,25 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not insert prompt: {exc}")
 
+    def open_compose(self):
+        """The typed-text window. Called from the menu, so on the GUI thread."""
+        from .compose import open_compose
+
+        if self.text_translator is None:
+            from .translator import TextTranslator
+
+            self.text_translator = TextTranslator(self.config)
+
+        target = self.tracker.title if self.tracker is not None else None
+        try:
+            open_compose(
+                self.text_translator,
+                on_paste=self.insert_prompt,   # same route a template takes
+                target_name=target or None,
+            )
+        except Exception as exc:
+            self.feedback.error(f"could not open the write window: {exc}")
+
     def edit_prompts(self):
         """Open the editor window. Called from the menu, so already on the GUI thread."""
         from .prompt_editor import open_editor
@@ -418,6 +440,7 @@ class VoicePrompt:
             prompts_getter=prompts_mod.load,
             on_prompt=self.insert_prompt,
             on_edit_prompts=self.edit_prompts,
+            on_compose=self.open_compose,
         )
         self.orb.level_getter = lambda: self.recorder.level
         self.orb.set_state(PROCESSING)  # spinner until the model is loaded

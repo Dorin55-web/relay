@@ -103,6 +103,32 @@ quarter of a second, eased at both ends.
 
 ---
 
+## Typing instead of talking
+
+Right-click the dot and pick **Write instead...**. Type Romanian in the top box;
+the English appears underneath as you pause. `Copy` puts it on the clipboard,
+`Send` puts it into the box you last typed in — the same target dictation uses.
+`Ctrl+Enter` translates and sends in one go, `Escape` closes.
+
+The English box is editable. Fix it there before sending, and what you send is
+what you fixed, not what came out of the model.
+
+For a term Whisper keeps mangling, something you are copying off a page, or a
+room where talking is not an option.
+
+> **This is a different, much weaker model than the one dictation uses.**
+> Whisper's translate task takes *audio* — it cannot help with anything you
+> type, so this is a separate 300 MB Marian model, downloaded once on first use.
+> It works a sentence at a time with no wider context, so an ambiguous word gets
+> its common reading rather than the one your paragraph implies: *"Nu scrie
+> nimic încă"* comes back as *"It doesn't write anything yet"* rather than
+> *"Don't write anything yet"*. Read it before you send it.
+>
+> Nothing is downloaded or loaded until you open the window for the first time.
+> Dictation never touches it.
+
+---
+
 ## Prompt templates
 
 Right-click the dot. Ten scaffolds you reach for constantly, numbered and
@@ -240,6 +266,8 @@ relay/
 ├── injector.py          clipboard save → set → Ctrl+V → restore
 ├── prompts.py           the right-click template library, over prompts.json
 ├── prompt_editor.py     the window that edits it
+├── translator.py        Romanian text to English text (Marian, not Whisper)
+├── compose.py           the window you type into
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating dot and level meter (PySide6)
