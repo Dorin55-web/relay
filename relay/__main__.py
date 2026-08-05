@@ -24,6 +24,7 @@ from .config import load_config, write_default_config  # noqa: E402
 from .feedback import Feedback  # noqa: E402
 from .injector import paste_text, restore_clipboard, save_clipboard  # noqa: E402
 from . import prompts as prompts_mod  # noqa: E402
+from .watchdog import Watchdog  # noqa: E402
 
 IDLE, RECORDING, PROCESSING = "idle", "recording", "processing"
 
@@ -81,6 +82,9 @@ class VoicePrompt:
         # Pinned when a dictation starts, so phrases keep going to the window
         # you were writing in even if focus wanders mid-sentence.
         self._target_hwnd = None
+        # Watches for the stretches where nothing Python can run. Costs a
+        # wake-up every 50ms and says nothing unless something goes wrong.
+        self.watchdog = Watchdog()
 
     # --- hotkey handling -------------------------------------------------
 
@@ -449,6 +453,7 @@ class VoicePrompt:
                 self.orb.flash("error")
 
     def _start_threads(self):
+        self.watchdog.start()
         if self.config.remember_target:
             from .target import TargetTracker
 
@@ -480,6 +485,8 @@ class VoicePrompt:
             audio_mod.sd._terminate()
         except Exception as exc:
             print(f"[audio] could not release the audio stack: {exc}")
+        self.watchdog.stop()
+        print(self.watchdog.summary())
         print("Stopped.\n")
 
     def run(self, show_ui=True):
