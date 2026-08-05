@@ -156,13 +156,33 @@ class FramelessWindow(QWidget):
             return Qt.SizeVerCursor
         return None
 
+    def _resize_edges_at(self, pos):
+        """Edges to drag from here, or none if this is not bare window.
+
+        Being within the margin is not enough. The strip runs alongside the
+        text boxes and the row of buttons, and a resize started from there is
+        one nobody asked for: the pointer belongs to the compositor until the
+        drag ends, which reads exactly like the window having seized it.
+
+        The test is what a click there would mean, not merely whether a widget
+        is present. Anything that can take focus - a text box, a list, a button
+        - is somewhere you meant to click. The title bar and the labels cannot,
+        and must stay transparent here: the bar spans the whole top edge, so
+        treating any child as a blocker kills the top edge and both top corners
+        outright.
+        """
+        child = self.childAt(pos.toPoint())
+        if child is not None and child.focusPolicy() != Qt.NoFocus:
+            return Qt.Edges()
+        return self._edges_at(pos)
+
     def mouseMoveEvent(self, event):
         """Show what a click here would do, before it does it.
 
         Without this the press handler still starts a resize, so a click near
         an edge begins a drag with nothing having said it would.
         """
-        shape = self._edge_cursor(self._edges_at(event.position()))
+        shape = self._edge_cursor(self._resize_edges_at(event.position()))
         if shape is None:
             self.unsetCursor()
         else:
@@ -171,12 +191,14 @@ class FramelessWindow(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            edges = self._edges_at(event.position())
+            edges = self._resize_edges_at(event.position())
             handle = self.windowHandle()
             if edges and handle is not None:
                 # Hand the drag to the compositor rather than chasing the mouse
                 # ourselves: it gets the snapping and the minimum size right,
                 # and never lags behind the pointer.
+                print(f"[window] resize from {int(edges)} at "
+                      f"{event.position().x():.0f},{event.position().y():.0f}")
                 handle.startSystemResize(edges)
                 return
         super().mousePressEvent(event)
