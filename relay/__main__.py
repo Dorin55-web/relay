@@ -327,12 +327,15 @@ class VoicePrompt:
 
             self.text_translator = TextTranslator(self.config)
 
-        target = self.tracker.title if self.tracker is not None else None
         try:
             open_compose(
                 self.text_translator,
                 on_paste=self.insert_prompt,   # same route a template takes
-                target_name=target or None,
+                # Read each time, not once: the target follows your clicks and
+                # can change while the window sits open.
+                target_getter=lambda: (
+                    self.tracker.title if self.tracker is not None else None
+                ),
             )
         except Exception as exc:
             self.feedback.error(f"could not open the write window: {exc}")

@@ -23,6 +23,26 @@ from .prompt_editor import (BG, LINE, MUTED, PANEL, RESIZE_MARGIN, TEXT,
 # every keystroke, short enough that pausing to think produces one.
 DEBOUNCE_MS = 450
 
+# How often the Send button re-reads where it would actually paste. The target
+# changes when you click into a different text box, which can happen while this
+# window is open.
+TARGET_POLL_MS = 700
+
+# A window title is not a name. A browser's is the whole page title, which on a
+# search results page is the query and every parameter with it - long enough to
+# stretch the button across the window if it is used raw.
+MAX_TARGET_CHARS = 22
+
+
+def short_target(name):
+    """A window title cut down to something that fits on a button."""
+    name = " ".join((name or "").split())
+    if not name:
+        return ""
+    if len(name) <= MAX_TARGET_CHARS:
+        return name
+    return name[: MAX_TARGET_CHARS - 1].rstrip() + "…"
+
 STYLESHEET = f"""
 QWidget {{ background: {BG}; color: {TEXT}; font-size: 13px; }}
 QWidget#shell {{
@@ -67,11 +87,15 @@ class _Bridge(QObject):
 
 
 class Compose(QWidget):
-    def __init__(self, translator, on_paste, target_name=None):
+    def __init__(self, translator, on_paste, target_getter=None):
         super().__init__()
         self.translator = translator
         self.on_paste = on_paste
-        self.target_name = target_name
+        # A callable, not a string: the target moves when you click into a
+        # different text box, and that can happen while this window is open.
+        # A label captured at construction would name the wrong window.
+        self.target_getter = target_getter
+        self._target_shown = None
 
         self._pending = 0            # newest request id, so stale ones are dropped
         self._english = ""
@@ -93,8 +117,13 @@ class Compose(QWidget):
         self._debounce.setInterval(DEBOUNCE_MS)
         self._debounce.timeout.connect(self._translate_now)
 
+        self._target_timer = QTimer(self)
+        self._target_timer.timeout.connect(self._refresh_target)
+        self._target_timer.start(TARGET_POLL_MS)
+
         self._build()
         self.setStyleSheet(STYLESHEET)
+        self._refresh_target()
         self.source.setFocus()
 
     # --- layout -----------------------------------------------------------
@@ -118,9 +147,10 @@ class Compose(QWidget):
 
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.clicked.connect(self._copy)
-        self.paste_btn = QPushButton(
-            f"Send to {self.target_name}" if self.target_name else "Send"
-        )
+        self.paste_btn = QPushButton("Send")
+        # Belt and braces on top of truncating the title: whatever ends up in
+        # the label, the button cannot shove the rest of the row off screen.
+        self.paste_btn.setMaximumWidth(260)
         self.paste_btn.clicked.connect(self._send)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
@@ -156,6 +186,25 @@ class Compose(QWidget):
         label = QLabel(text)
         label.setObjectName("field")
         return label
+
+    def _refresh_target(self):
+        """Keep the Send button naming the window it would really paste into."""
+        name = ""
+        if self.target_getter is not None:
+            try:
+                name = self.target_getter() or ""
+            except Exception:
+                name = ""
+        if name == self._target_shown:
+            return
+        self._target_shown = name
+        short = short_target(name)
+        self.paste_btn.setText(f"Send to {short}" if short else "Send")
+        # The full title is worth having somewhere, just not on the button.
+        self.paste_btn.setToolTip(
+            f"Paste into: {name}" if name
+            else "Paste into whatever has focus when you send"
+        )
 
     # --- translating ------------------------------------------------------
 
@@ -300,17 +349,18 @@ class Compose(QWidget):
         global _window
         _window = None
         self._debounce.stop()
+        self._target_timer.stop()
         super().closeEvent(event)
 
 
-def open_compose(translator, on_paste, target_name=None):
+def open_compose(translator, on_paste, target_getter=None):
     """Show the window, raising the one already open rather than a second."""
     global _window
     if _window is not None and _window.isVisible():
         _window.raise_()
         _window.activateWindow()
         return _window
-    _window = Compose(translator, on_paste, target_name)
+    _window = Compose(translator, on_paste, target_getter)
     _window.show()
     _window.raise_()
     _window.activateWindow()
