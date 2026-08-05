@@ -16,8 +16,8 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
-from .prompt_editor import (BG, LINE, MUTED, PANEL, RESIZE_MARGIN, TEXT,
-                            TitleBar, _colorref)
+from .prompt_editor import BG, LINE, MUTED, PANEL, TEXT
+from .window import FramelessWindow, TitleBar
 
 # Long enough that a normal typing rhythm does not trigger a translation on
 # every keystroke, short enough that pausing to think produces one.
@@ -86,9 +86,11 @@ class _Bridge(QObject):
     done = Signal(str, str)      # english, error
 
 
-class Compose(QWidget):
+class Compose(FramelessWindow):
+    border_colour = LINE
+
     def __init__(self, translator, on_paste, target_getter=None):
-        super().__init__()
+        super().__init__("Relay - Write")
         self.translator = translator
         self.on_paste = on_paste
         # A callable, not a string: the target moves when you click into a
@@ -100,14 +102,8 @@ class Compose(QWidget):
         self._pending = 0            # newest request id, so stale ones are dropped
         self._english = ""
 
-        self.setWindowTitle("Relay - Write")
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setObjectName("shell")
-        self.setMouseTracking(True)
         self.setMinimumSize(620, 460)
         self.resize(820, 620)
-        self._rounded = False
 
         self.bridge = _Bridge()
         self.bridge.done.connect(self._show_result)
@@ -282,59 +278,10 @@ class Compose(QWidget):
         self.close()          # get out of the way before focus moves back
         self.on_paste(text)
 
-    # --- frameless chrome -------------------------------------------------
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if not self._rounded:
-            self._rounded = True
-            self._round_corners()
-
-    def _round_corners(self):
-        import ctypes
-        import sys
-
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            dwm = ctypes.windll.dwmapi
-            preference = ctypes.c_int(2)          # DWMWCP_ROUND
-            dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(preference),
-                                      ctypes.sizeof(preference))
-            border = ctypes.c_uint(_colorref(LINE))
-            dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(border),
-                                      ctypes.sizeof(border))
-        except Exception as exc:
-            print(f"[compose] could not round the window corners: {exc}")
-
-    def _edges_at(self, pos):
-        edges = Qt.Edges()
-        if pos.x() <= RESIZE_MARGIN:
-            edges |= Qt.LeftEdge
-        elif pos.x() >= self.width() - RESIZE_MARGIN:
-            edges |= Qt.RightEdge
-        if pos.y() <= RESIZE_MARGIN:
-            edges |= Qt.TopEdge
-        elif pos.y() >= self.height() - RESIZE_MARGIN:
-            edges |= Qt.BottomEdge
-        return edges
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            edges = self._edges_at(event.position())
-            handle = self.windowHandle()
-            if edges and handle is not None:
-                handle.startSystemResize(edges)
-                return
-        super().mousePressEvent(event)
-
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            self.close()
-            return
-        # Ctrl+Enter is the whole point of the window: translate whatever is
-        # there right now and send it, without waiting out the debounce.
+        # The shortcut the placeholder promises: translate whatever is there
+        # right now and send it, without waiting out the debounce. Escape and
+        # everything else is the base window's business.
         if (event.key() in (Qt.Key_Return, Qt.Key_Enter)
                 and event.modifiers() & Qt.ControlModifier):
             if self._current_english():

@@ -11,17 +11,15 @@ you type into it - so none of the non-activating style applies. It never becomes
 a paste target either: the tracker ignores windows belonging to our own process.
 """
 
-import ctypes
-import sys
-
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QCursor, QFont
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton,
                                QVBoxLayout, QWidget)
 
 from . import prompts as prompts_mod
+from .window import FramelessWindow, TitleBar
 
 # The orb's palette, so the two read as one program.
 BG = "#0e1015"
@@ -31,23 +29,6 @@ TEXT = "#e8ebf0"
 MUTED = "#8b93a1"
 
 ROW_HEIGHT = 32          # ten of these fit without the list ever scrolling
-RESIZE_MARGIN = 6        # grab strip around the frameless edge
-TITLE_HEIGHT = 38
-
-# Windows 11 rounds ordinary windows by itself, but a frameless Qt window is a
-# WS_POPUP and DWM leaves those square. The stylesheet's border-radius only
-# rounds the painted background, not the window, so the corner has to be asked
-# for. https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
-DWMWA_WINDOW_CORNER_PREFERENCE = 33
-DWMWA_BORDER_COLOR = 34
-DWMWCP_ROUND = 2
-
-
-def _colorref(hex_colour):
-    """#rrggbb -> the 0x00bbggrr integer DWM wants."""
-    value = hex_colour.lstrip("#")
-    red, green, blue = (int(value[i:i + 2], 16) for i in (0, 2, 4))
-    return (blue << 16) | (green << 8) | red
 
 STYLESHEET = f"""
 QWidget {{
@@ -112,68 +93,17 @@ QPushButton#tiny {{ padding: 4px 0; font-size: 15px; }}
 _window = None
 
 
-class TitleBar(QWidget):
-    """Replaces the Windows caption, so the whole window is one piece.
+class PromptEditor(FramelessWindow):
+    border_colour = LINE
 
-    Dragging hands straight over to the compositor with startSystemMove rather
-    than moving the window from mouse deltas: that is what keeps Aero snap, the
-    double-click behaviour and multi-monitor DPI changes working, none of which
-    are worth reimplementing.
-    """
-
-    def __init__(self, title, on_minimise, on_close):
-        super().__init__()
-        self.setFixedHeight(TITLE_HEIGHT)
-
-        label = QLabel(title)
-        label.setObjectName("title")
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(14, 0, 7, 0)
-        row.setSpacing(2)
-        row.addWidget(label)
-        row.addStretch(1)
-        row.addWidget(self._button("–", "Minimise", on_minimise))
-        row.addWidget(self._button("✕", "Close", on_close))
-
-    def _button(self, glyph, tip, slot):
-        button = QPushButton(glyph)
-        button.setObjectName("chrome")
-        button.setToolTip(tip)
-        button.setFixedSize(30, 26)
-        button.setCursor(Qt.ArrowCursor)
-        button.clicked.connect(slot)
-        return button
-
-    def mousePressEvent(self, event):
-        if event.button() != Qt.LeftButton:
-            return
-        # The very top of this bar is also the window's top resize edge. Let it
-        # through rather than starting a move, or the top corners could only
-        # ever be dragged, never resized.
-        if event.position().y() <= RESIZE_MARGIN:
-            event.ignore()
-            return
-        handle = self.window().windowHandle()
-        if handle is not None:
-            handle.startSystemMove()
-
-
-class PromptEditor(QWidget):
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Relay - Prompts")
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setObjectName("shell")
-        self.setMouseTracking(True)
+        super().__init__("Relay - Prompts")
         self.setMinimumSize(720, 460)
         self.resize(880, 520)
 
         self.entries = [dict(p) for p in prompts_mod.load()]
         self.index = -1
         self._loading = False       # guard: filling the fields is not an edit
-        self._rounded = False
 
         self._build()
         # After _build, not before: the #primary rule only matches once the
@@ -430,97 +360,6 @@ class PromptEditor(QWidget):
             "Check the file is not open elsewhere or read-only.",
         )
         return False
-
-    # --- frameless chrome -------------------------------------------------
-
-    def showEvent(self, event):
-        # Needs a real HWND, which only exists once the window is being shown.
-        super().showEvent(event)
-        if not self._rounded:
-            self._rounded = True
-            self._round_corners()
-
-    def _round_corners(self):
-        """Ask DWM to round the window and tint its border.
-
-        A no-op before Windows 11: DwmSetWindowAttribute returns a failure code
-        for an attribute the running version does not know, which is fine - the
-        window is simply square, as it was.
-        """
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            dwm = ctypes.windll.dwmapi
-            preference = ctypes.c_int(DWMWCP_ROUND)
-            dwm.DwmSetWindowAttribute(
-                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
-                ctypes.byref(preference), ctypes.sizeof(preference),
-            )
-            border = ctypes.c_uint(_colorref(LINE))
-            dwm.DwmSetWindowAttribute(
-                hwnd, DWMWA_BORDER_COLOR,
-                ctypes.byref(border), ctypes.sizeof(border),
-            )
-        except Exception as exc:
-            print(f"[prompts] could not round the window corners: {exc}")
-
-    def _edges_at(self, pos):
-        """Which window edges the pointer is close enough to drag."""
-        edges = Qt.Edges()
-        if pos.x() <= RESIZE_MARGIN:
-            edges |= Qt.LeftEdge
-        elif pos.x() >= self.width() - RESIZE_MARGIN:
-            edges |= Qt.RightEdge
-        if pos.y() <= RESIZE_MARGIN:
-            edges |= Qt.TopEdge
-        elif pos.y() >= self.height() - RESIZE_MARGIN:
-            edges |= Qt.BottomEdge
-        return edges
-
-    def _edge_cursor(self, edges):
-        horizontal = bool(edges & (Qt.LeftEdge | Qt.RightEdge))
-        vertical = bool(edges & (Qt.TopEdge | Qt.BottomEdge))
-        if horizontal and vertical:
-            falling = bool(edges & Qt.TopEdge) == bool(edges & Qt.LeftEdge)
-            return Qt.SizeFDiagCursor if falling else Qt.SizeBDiagCursor
-        if horizontal:
-            return Qt.SizeHorCursor
-        if vertical:
-            return Qt.SizeVerCursor
-        return None
-
-    def mouseMoveEvent(self, event):
-        shape = self._edge_cursor(self._edges_at(event.position()))
-        if shape is None:
-            self.unsetCursor()
-        else:
-            self.setCursor(QCursor(shape))
-        super().mouseMoveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            edges = self._edges_at(event.position())
-            handle = self.windowHandle()
-            if edges and handle is not None:
-                # Hand the drag to the compositor rather than chasing the mouse
-                # ourselves: it gets the aspect snapping and the minimum size
-                # right, and never lags behind the pointer.
-                handle.startSystemResize(edges)
-                return
-        super().mousePressEvent(event)
-
-    def leaveEvent(self, event):
-        self.unsetCursor()
-        super().leaveEvent(event)
-
-    def keyPressEvent(self, event):
-        # There is no system menu on a frameless window, so Escape is the only
-        # keyboard way out.
-        if event.key() == Qt.Key_Escape:
-            self.close()
-            return
-        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         global _window

@@ -23,6 +23,11 @@ REPETITION_PENALTY = 1.1
 NO_REPEAT_NGRAM = 4
 MAX_DECODING_LENGTH = 256
 
+# Sentences remembered between calls. A long document is a few dozen; this is
+# generous enough that nothing you are working on falls out, and small enough
+# that it cannot grow without bound over a long session.
+CACHE_SENTENCES = 400
+
 # Sentence at a time: the model was trained that way, and feeding it a whole
 # paragraph makes it drop clauses off the end.
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
@@ -54,6 +59,8 @@ class TextTranslator:
         self._source = None
         self._target = None
         self._lock = threading.Lock()
+        # Insertion-ordered, so the oldest entry is the one that goes.
+        self._cache = {}
         self.device = None
         self.error = None
 
@@ -117,17 +124,33 @@ class TextTranslator:
         if not payload:
             return ""
 
-        batch = [self._source.encode(s, out_type=str) + [END_TOKEN] for s in payload]
-        with self._lock:
-            results = self._translator.translate_batch(
-                batch,
-                beam_size=BEAM_SIZE,
-                repetition_penalty=REPETITION_PENALTY,
-                no_repeat_ngram_size=NO_REPEAT_NGRAM,
-                max_decoding_length=MAX_DECODING_LENGTH,
-            )
+        # Typing a paragraph re-translates it from the top on every pause, so
+        # by the last clause the earlier sentences have been through the model
+        # several times over for the same answer. Only the ones never seen
+        # before are sent.
+        fresh = [s for s in dict.fromkeys(payload) if s not in self._cache]
+        if fresh:
+            batch = [self._source.encode(s, out_type=str) + [END_TOKEN]
+                     for s in fresh]
+            with self._lock:
+                results = self._translator.translate_batch(
+                    batch,
+                    beam_size=BEAM_SIZE,
+                    repetition_penalty=REPETITION_PENALTY,
+                    no_repeat_ngram_size=NO_REPEAT_NGRAM,
+                    max_decoding_length=MAX_DECODING_LENGTH,
+                )
+            for sentence, result in zip(fresh, results):
+                self._remember(sentence, self._target.decode(result.hypotheses[0]))
 
-        done = iter(self._target.decode(r.hypotheses[0]) for r in results)
         # Sentences rejoin within their line; lines rejoin with the breaks you
         # typed, blank ones included.
-        return "\n".join(" ".join(next(done) for _ in line) for line in lines)
+        return "\n".join(
+            " ".join(self._cache[s] for s in line) for line in lines
+        )
+
+    def _remember(self, source, english):
+        """Cache one sentence, oldest out first once the window is full."""
+        self._cache[source] = english
+        while len(self._cache) > CACHE_SENTENCES:
+            self._cache.pop(next(iter(self._cache)))
