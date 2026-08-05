@@ -99,6 +99,8 @@ class FramelessWindow(QWidget):
         self.setObjectName("shell")
         self.setMouseTracking(True)
         self._rounded = False
+        # What the cursor is showing, so it is only changed on a transition.
+        self._cursor_shape = None
 
     # --- native corners ---------------------------------------------------
 
@@ -170,23 +172,39 @@ class FramelessWindow(QWidget):
         and must stay transparent here: the bar spans the whole top edge, so
         treating any child as a blocker kills the top edge and both top corners
         outright.
+
+        The cheap test comes first. Mouse tracking is on, so this runs on every
+        pixel of movement, and childAt walks the whole child tree. Nearly all of
+        those events are nowhere near an edge, and for those the arithmetic
+        answers on its own.
         """
+        edges = self._edges_at(pos)
+        if not edges:
+            return edges
         child = self.childAt(pos.toPoint())
         if child is not None and child.focusPolicy() != Qt.NoFocus:
             return Qt.Edges()
-        return self._edges_at(pos)
+        return edges
 
     def mouseMoveEvent(self, event):
         """Show what a click here would do, before it does it.
 
         Without this the press handler still starts a resize, so a click near
         an edge begins a drag with nothing having said it would.
+
+        Only when the shape actually changes. The first version set the cursor
+        on every event, which for a sweep across the window is over a thousand
+        calls that each ask the window manager for the same answer - enough,
+        while the window is still being built and its fonts and stylesheet
+        loaded, to leave the pointer visibly stuck.
         """
         shape = self._edge_cursor(self._resize_edges_at(event.position()))
-        if shape is None:
-            self.unsetCursor()
-        else:
-            self.setCursor(QCursor(shape))
+        if shape != self._cursor_shape:
+            self._cursor_shape = shape
+            if shape is None:
+                self.unsetCursor()
+            else:
+                self.setCursor(QCursor(shape))
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event):
@@ -205,7 +223,9 @@ class FramelessWindow(QWidget):
 
     def leaveEvent(self, event):
         # Or the resize cursor follows the pointer out of the window.
-        self.unsetCursor()
+        if self._cursor_shape is not None:
+            self._cursor_shape = None
+            self.unsetCursor()
         super().leaveEvent(event)
 
     def keyPressEvent(self, event):
