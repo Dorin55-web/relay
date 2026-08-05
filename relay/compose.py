@@ -293,21 +293,46 @@ class Compose(FramelessWindow):
         super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        global _window
-        _window = None
+        # Kept, not dropped: rebuilding costs 700ms and this window is now
+        # made once per session. Its timers stop while it is out of sight.
         self._debounce.stop()
         self._target_timer.stop()
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # A reopened window starts polling again, and starts clean.
+        self._target_timer.start(TARGET_POLL_MS)
+        self._refresh_target()
+
+
+def prebuild(translator, on_paste, target_getter=None):
+    """Construct the window now, without showing it.
+
+    The first construction costs around 700ms - Qt loading fonts, parsing the
+    stylesheet, creating the native window - and every one after it costs 30.
+    Doing it on the click means the whole cost lands while someone is waiting
+    and moving the mouse. Doing it at start-up, while the speech model is
+    loading anyway, means nobody is waiting for anything.
+    """
+    global _window
+    if _window is not None:
+        return _window
+    _window = Compose(translator, on_paste, target_getter)
+    return _window
 
 
 def open_compose(translator, on_paste, target_getter=None):
     """Show the window, raising the one already open rather than a second."""
     global _window
-    if _window is not None and _window.isVisible():
-        _window.raise_()
-        _window.activateWindow()
-        return _window
-    _window = Compose(translator, on_paste, target_getter)
+    if _window is None:
+        _window = Compose(translator, on_paste, target_getter)
+    elif not _window.isVisible():
+        # A prebuilt one, or one closed earlier: its callbacks belong to the
+        # session that made it, which is still this one, but the target getter
+        # is worth refreshing in case the caller passed a new one.
+        _window.on_paste = on_paste
+        _window.target_getter = target_getter
     _window.show()
     _window.raise_()
     _window.activateWindow()

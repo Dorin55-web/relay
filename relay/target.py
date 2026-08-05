@@ -192,6 +192,29 @@ class TargetTracker:
         self._listener.start()
         return self
 
+    def pause(self):
+        """Take the mouse hook down for a moment.
+
+        Windows runs a low-level hook for every mouse message in the system,
+        and this one's callback is Python, so it needs the GIL to return. Any
+        stretch where our process holds the GIL is a stretch where the hook
+        cannot return - and until it does, Windows delivers no mouse input to
+        anybody. Building a window for the first time is such a stretch. With
+        no hook installed there is nothing to block.
+        """
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+
+    def resume(self):
+        """Put it back. A stopped pynput listener cannot restart, so make one."""
+        if self._listener is not None:
+            return
+        from pynput import mouse
+
+        self._listener = mouse.Listener(on_click=self._on_click)
+        self._listener.start()
+
     def stop(self):
         if self._listener is not None:
             self._listener.stop()
