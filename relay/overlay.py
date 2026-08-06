@@ -37,13 +37,11 @@ from PySide6.QtGui import (QAction, QColor, QCursor, QIcon, QLinearGradient,
 from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
 
 from . import orbs, sphere
-from .config import DEFAULTS, normalise_orb
+from .config import normalise_orb
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
-ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
-DEFAULT_ORB_SIZE = DEFAULTS["orb"]["size"]
 # Just enough room that the outermost dot's antialiased edge is not clipped by
 # the window. There used to be a shadow out here, and a dark disc under the
 # mark, and both are gone: nothing is drawn now except the dots themselves.
@@ -453,11 +451,6 @@ class Orb(QWidget):
         except OSError:
             pass
 
-    def _screen_geometry(self):
-        """The screen the orb is actually on, not just the primary one."""
-        screen = self.app.screenAt(QPoint(int(self.anchor_x), int(self.anchor_y)))
-        return (screen or self.app.primaryScreen()).availableGeometry()
-
     def _apply_geometry(self):
         """A square around the anchor. Only the size slider ever changes it."""
         self.setGeometry(
@@ -546,14 +539,6 @@ class Orb(QWidget):
             return
         self.state = state
         self._change_look(self._look_for(state))
-
-    def flash(self, kind):
-        """Kept so callers need not care, but deliberately does nothing.
-
-        Success and failure used to tint the dot green or red. The look
-        changing back already says the dictation finished, and the log says how
-        it went, so a colour change here only added noise.
-        """
 
     # --- looks ------------------------------------------------------------
 

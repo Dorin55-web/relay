@@ -215,8 +215,6 @@ class FramelessWindow(QWidget):
                 # Hand the drag to the compositor rather than chasing the mouse
                 # ourselves: it gets the snapping and the minimum size right,
                 # and never lags behind the pointer.
-                print(f"[window] resize from {int(edges)} at "
-                      f"{event.position().x():.0f},{event.position().y():.0f}")
                 handle.startSystemResize(edges)
                 return
         super().mousePressEvent(event)

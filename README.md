@@ -347,10 +347,18 @@ relay/
 ├── orbs/                the nine looks it can wear
 ├── look_picker.py       the window that assigns one to each state
 ├── sphere.py            the still globe the icon is drawn from
+├── window.py            the frameless chrome both windows wear
+├── watchdog.py          reports the stretches where nothing Python can run
 ├── feedback.py          console status
 ├── logsetup.py          redirects output to the log when there is no console
 └── single_instance.py   refuses to start twice
 ```
+
+`watchdog.py` is instrumentation rather than a feature. It wakes every 50 ms
+and says nothing unless the interpreter has been unable to run for longer than
+a low-level Windows hook is allowed to take, in which case it writes a
+`[stall]` block into `relay.log` with a stack for every thread. That is what
+those blocks are if you see them.
 
 The icon in the taskbar is drawn at run time rather than loaded from that file,
 so it is always in step with the code. The file is only for the shortcuts — a

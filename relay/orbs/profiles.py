@@ -48,13 +48,17 @@ def scale_counts(opts, scale):
 
 
 def scale_radii(opts, scale):
+    """Scale every key that sets a dot's drawn radius, and nothing else.
+
+    The original also stashes the multiplier itself under `r_size_mul`, for a
+    morph outline whose radius comes from spacing rather than from any single
+    key here. Relay's morph reads `spread` and `r_dot` instead and never looks
+    at it, so it is not carried.
+    """
     out = dict(opts)
     for key in RADIUS_KEYS:
         if key in out:
             out[key] = out[key] * scale
-    # Remember the multiplier itself: the morph outline's radius comes from
-    # spacing rather than from any single key here.
-    out["r_size_mul"] = out.get("r_size_mul", 1.0) * scale
     return out
 
 

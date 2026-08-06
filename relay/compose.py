@@ -14,7 +14,7 @@ import threading
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout)
 
 from .prompt_editor import BG, LINE, MUTED, PANEL, TEXT
 from .window import FramelessWindow, TitleBar

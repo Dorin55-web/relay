@@ -182,7 +182,6 @@ class VoicePrompt:
                 self.feedback.error(f"could not start recording: {exc}")
                 if self.orb:
                     self.orb.set_state(IDLE)   # undo the optimistic repaint
-                    self.orb.flash("error")
                 return
             self._set_state(RECORDING)
             self.feedback.recording_started(self.recorder.device_name)
@@ -219,8 +218,6 @@ class VoicePrompt:
                 self._handle_clip(clip)
             except Exception as exc:
                 self.feedback.error(f"processing failed: {exc}")
-                if self.orb:
-                    self.orb.flash("error")
             finally:
                 self._set_state(IDLE)
                 self._jobs.task_done()
@@ -240,13 +237,8 @@ class VoicePrompt:
             if phrase is audio_mod.END_OF_SESSION:
                 restore_clipboard(self._session_clipboard, self.config)
                 self._session_clipboard = None
-                if self._pasted_any:
-                    if self.orb:
-                        self.orb.flash("ok")
-                else:
+                if not self._pasted_any:
                     self.feedback.nothing_heard()
-                    if self.orb:
-                        self.orb.flash("error")
                 self._set_state(IDLE)
                 continue
 
@@ -267,23 +259,15 @@ class VoicePrompt:
     def _handle_clip(self, clip):
         if clip is None:
             self.feedback.nothing_heard()
-            if self.orb:
-                self.orb.flash("error")
             return
         text = self.engine.translate(clip)
         if not text:
             self.feedback.nothing_heard()
-            if self.orb:
-                self.orb.flash("error")
             return
         if paste_text(text, self.config, target_hwnd=self._target_hwnd):
             self.feedback.success(text)
-            if self.orb:
-                self.orb.flash("ok")
         else:
             self.feedback.error(f"could not paste, text was: {text}")
-            if self.orb:
-                self.orb.flash("error")
 
     # --- prompt templates -------------------------------------------------
 
@@ -469,8 +453,6 @@ class VoicePrompt:
             self._request_prebuild()
         except Exception as exc:
             self.feedback.error(f"could not load Whisper: {exc}")
-            if self.orb:
-                self.orb.flash("error")
 
     def _start_threads(self):
         self.watchdog.start()

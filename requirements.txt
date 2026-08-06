@@ -1,3 +1,6 @@
+# ctranslate2 is imported directly by translator.py and cuda_setup.py, but is
+# not pinned here on purpose: it arrives with faster-whisper, and that pin is
+# exact, so the two can never disagree about which build is installed.
 faster-whisper==1.2.1
 nvidia-cublas-cu12
 nvidia-cudnn-cu12>=9.0

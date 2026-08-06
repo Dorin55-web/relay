@@ -11,12 +11,12 @@ you type into it - so none of the non-activating style applies. It never becomes
 a paste target either: the tracker ignores windows belonging to our own process.
 """
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout)
 
 from . import prompts as prompts_mod
 from .window import FramelessWindow, TitleBar
