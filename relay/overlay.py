@@ -1,13 +1,18 @@
-"""A small always-on-top indicator: a quiet dot that opens into a live waveform.
+"""A small always-on-top indicator: a globe of dots your voice rolls through.
 
-Idle it is a single soft dot. Click it and the capsule animates open, showing
-the last second of your voice as bars that scroll right to left - the heights
-come from a history buffer, so the row reflects what you actually said.
+At rest it is a still, dim sphere. While it listens, the last second of your
+voice travels through its rings from one pole to the other - the rings it
+passes push out, brighten and swell, so the movement reads at 48 pixels where a
+purely geometric ripple would be four pixels and invisible.
 
-Built on PySide6 rather than tkinter for real alpha: soft glows, a translucent
-capsule and a drop shadow, plus an animated open/close. The window is padded by
+The sphere never changes shape. An earlier version opened sideways into a
+capsule, which brought a direction to choose, a mark to mirror and a geometry to
+animate; a ball has no handedness and no width, so all of that is gone and the
+window is a fixed square.
+
+Built on PySide6 rather than tkinter for real alpha. The window is padded by
 SHADOW_PAD on every side so the shadow has somewhere to fall; all drawing is
-inset by that margin, and the saved position always refers to the visible dot
+inset by that margin, and the saved position always refers to the visible orb
 rather than the padded window.
 """
 
@@ -23,73 +28,78 @@ from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
+from . import sphere
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
 ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
-DOT_BOX = 48             # visible size of the collapsed tile
-CAPSULE_W = 100          # visible width when open
-CAPSULE_H = 48
+ORB_SIZE = 48            # the sphere's diameter on screen
 SHADOW_PAD = 12          # room around the artwork for the drop shadow
+GLOBE_FILL = 0.82        # how much of the circle the dots reach into
+MIN_DOT_PIXELS = 0.55    # floor, so a 16px icon still draws dots not haze
 
-DOT_R_OPEN = 6.0         # the dot shrinks once the live bars take over
-GLOW_R = 21.0            # halo scales with the dot, or it looks crowded
-
-# The icon's mark, as fractions of the tile, so the thing floating on screen and
-# the thing in the taskbar are the same drawing. The taskbar gets it on a square
-# tile because that is what app icons are; on screen it sits in a circle, which
-# is why the mark is shrunk a little - the corners of its bounding box would
-# otherwise run into the curve.
-MARK_SCALE = 0.86
-ICON_INSET = 0.03        # square-tile margin, for the taskbar icon
+# The taskbar wants a square tile, which is what every other app icon is.
+ICON_INSET = 0.03
 ICON_RADIUS = 0.23
-ICON_DOT_X = 0.252
-ICON_DOT_R = 0.108
-ICON_BAR_FIRST = 0.472
-ICON_BAR_STEP = 0.170
-ICON_BAR_W = 0.088
-ICON_BAR_H = (0.40, 0.64, 0.30)
+ICON_LIFT = 2.4          # the icon is drawn brighter than the resting orb
 
-BAR_COUNT = 8            # fewer bars, or they overlap in the narrow capsule
-BAR_WIDTH = 3.0
-SAMPLE_EVERY = 4         # frames per bar; the row then spans about half a second
+SAMPLE_EVERY = 4         # frames per level sample; the wave then spans ~0.5s
 FRAME_MS = 16            # 60fps: Qt can afford it and the motion reads smoother
-OPEN_FRAMES = 15         # about 240ms to open or close, eased at both ends
+LEVEL_CURVE = 0.7        # quiet speech still moves the wave visibly
 
-# Which of the icon's three bars each meter bar comes from. Opening fans the
-# eight apart from those three positions; closing gathers them back.
-BAR_SOURCE = [min(len(ICON_BAR_H) - 1, i * len(ICON_BAR_H) // BAR_COUNT)
-              for i in range(BAR_COUNT)]
-
-MAX_HALF = (CAPSULE_H - 16) / 2   # tallest a live bar gets
-LEVEL_CURVE = 0.7                 # quiet speech still moves the bars visibly
-
-# The levels that would draw the icon's own bar heights, one per icon bar. The
-# history is seeded from these when the capsule opens, so the meter starts from
-# the shape the mark already had rather than from silence - otherwise the bars
-# collapse to nothing on the way out and grow back.
-ICON_LEVEL = [
-    min(1.0, (DOT_BOX * height * MARK_SCALE / 2 / MAX_HALF) ** (1 / LEVEL_CURVE))
-    for height in ICON_BAR_H
-]
+# Samples the wave carries. One per ring would tie the two together; a few more
+# lets the wave travel through the rings rather than sit on them.
+HISTORY = 10
+# How fast the wave rolls, in samples per frame. Slow enough to follow, fast
+# enough that it is plainly moving.
+WAVE_SPEED = 0.055
+# The wave fades in and out over this many frames when listening starts and
+# stops, so the sphere wakes rather than snapping.
+FADE_FRAMES = 14
 
 
-def _smoothstep(t):
-    """Ease in and out. Linear progress in, eased position out."""
-    return t * t * (3.0 - 2.0 * t)
+TILE_TOP_RGB = (32, 36, 46)      # the sphere sits on this gradient
+TILE_BOTTOM_RGB = (13, 15, 20)
+TILE_ALPHA = 232
 
+# One colour, in every state. The wave rolling through the sphere is the signal
+# for listening, so the orb never needs to change hue to say anything.
+ACCENT = QColor("#e8ebf0")
 
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def _icon_pixmap(size, mirrored):
-    """The app icon at one size, facing the way the orb currently faces.
+def paint_globe(painter, cx, cy, diameter, level_at, lift=1.0):
+    """The dotted sphere, centred on cx/cy. The one drawing everything uses.
 
-    The same drawing as assets/relay.ico - on a square tile, because that is
-    what a taskbar button is - but flipped when the orb is. The file on disk
-    stays unmirrored; it is what the shortcuts point at, and a .lnk cannot
-    follow anything.
+    Far dots are drawn first so the near ones land on top of them, which is
+    the whole of the depth sorting a sphere this size needs. `lift` brightens
+    the lot: the orb wants to sit quietly at rest, an icon has to be legible
+    in a taskbar, and those are different jobs for the same drawing.
     """
+    radius = diameter / 2
+    reach = radius * GLOBE_FILL
+    rings, equator = sphere.rings_for(diameter)
+    # Fewer dots means more room for each. Without this the small icons draw
+    # sub-pixel dots and come out as a grey haze.
+    spread = sphere.EQUATOR_DOTS / equator
+    painter.setPen(Qt.NoPen)
+    for x, y, depth, _ring, level in sorted(
+            sphere.dots(level_at, rings=rings, equator=equator),
+            key=lambda d: d[2]):
+        colour = QColor(ACCENT)
+        colour.setAlphaF(min(1.0, sphere.dot_alpha(depth, level) * lift))
+        painter.setBrush(colour)
+        # And never below half a pixel, or antialiasing turns the dot into a
+        # faint stain rather than a dot.
+        r = max(MIN_DOT_PIXELS, sphere.dot_radius(depth, level, spread) * radius)
+        painter.drawEllipse(QPointF(cx + x * reach, cy - y * reach), r, r)
+
+
+def _icon_pixmap(size):
+    """The app icon at one size: the same globe on the square tile a taskbar
+    button wants."""
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
 
@@ -97,14 +107,10 @@ def _icon_pixmap(size, mirrored):
     painter.setRenderHint(QPainter.Antialiasing, True)
     s = float(size)
 
-    def at(fraction):
-        return s * (1.0 - fraction if mirrored else fraction)
-
     rect = QRectF(s * ICON_INSET, s * ICON_INSET,
                   s * (1 - 2 * ICON_INSET), s * (1 - 2 * ICON_INSET))
-    radius = s * ICON_RADIUS
     path = QPainterPath()
-    path.addRoundedRect(rect, radius, radius)
+    path.addRoundedRect(rect, s * ICON_RADIUS, s * ICON_RADIUS)
 
     tile = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
     tile.setColorAt(0.0, QColor(*TILE_TOP_RGB))
@@ -118,54 +124,19 @@ def _icon_pixmap(size, mirrored):
         painter.setPen(QPen(QColor(255, 255, 255, 26), max(1.0, s * 0.008)))
         painter.drawPath(path)
 
-    cy = s * 0.5
-    dot_x = at(ICON_DOT_X)
-    dot_r = s * ICON_DOT_R
-
-    if size >= 32:
-        glow_r = dot_r * 2.6
-        gradient = QRadialGradient(dot_x, cy, glow_r)
-        inner = QColor(ACCENT)
-        inner.setAlpha(64)
-        edge = QColor(ACCENT)
-        edge.setAlpha(0)
-        gradient.setColorAt(0.0, inner)
-        gradient.setColorAt(1.0, edge)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(gradient)
-        painter.drawEllipse(QPointF(dot_x, cy), glow_r, glow_r)
-
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(ACCENT)
-    painter.drawEllipse(QPointF(dot_x, cy), dot_r, dot_r)
-
-    for i, height in enumerate(ICON_BAR_H):
-        x = at(ICON_BAR_FIRST + i * ICON_BAR_STEP)
-        half = s * height / 2
-        colour = QColor(ACCENT)
-        colour.setAlpha(255 if i == 1 else 200)
-        painter.setPen(QPen(colour, s * ICON_BAR_W, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
-
+    # A still globe, but brighter than the orb sits at: an icon is an identity
+    # mark in a taskbar, not something being unobtrusive on a desktop.
+    paint_globe(painter, s / 2, s / 2, s * 0.94, lambda ring: 0.0, lift=ICON_LIFT)
     painter.end()
     return pixmap
 
 
-def build_icon(mirrored=False):
+def build_icon():
     """A multi-size icon, so the taskbar gets one drawn for its own size."""
     icon = QIcon()
     for size in ICON_SIZES:
-        icon.addPixmap(_icon_pixmap(size, mirrored))
+        icon.addPixmap(_icon_pixmap(size))
     return icon
-
-CAPSULE_RGB = (14, 16, 21)
-TILE_TOP_RGB = (32, 36, 46)      # same gradient as assets/relay.ico
-TILE_BOTTOM_RGB = (13, 15, 20)
-CAPSULE_ALPHA = 232
-
-# One colour, in every state. The capsule opening and closing is the signal for
-# start and finish, so the dot never needs to change hue to say anything.
-ACCENT = QColor("#e8ebf0")
 
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
@@ -193,15 +164,6 @@ def _make_non_activating(widget):
         print(f"[orb] could not set non-activating style: {exc}")
 
 
-def _blend(a, b, t):
-    t = max(0.0, min(1.0, t))
-    return QColor(
-        int(a.red() + (b.red() - a.red()) * t),
-        int(a.green() + (b.green() - a.green()) * t),
-        int(a.blue() + (b.blue() - a.blue()) * t),
-    )
-
-
 class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
                  prompts_getter=None, on_prompt=None, on_edit_prompts=None,
@@ -212,8 +174,6 @@ class Orb(QWidget):
         # prompt editor takes the whole app down with it and the dot vanishes.
         self.app.setQuitOnLastWindowClosed(False)
         super().__init__()
-
-        self._icon_mirrored = None
 
         self.on_toggle = on_toggle
         self.on_quit = on_quit
@@ -226,19 +186,14 @@ class Orb(QWidget):
 
         self.state = "idle"
         self.level_getter = lambda: 0.0
-        self._phase = 0.0
         self._frame = 0
-        self._expanded = False
-        self._grow_left = False
         self._press_global = None
         self._press_origin = None
-        self._history = deque([0.0] * BAR_COUNT, maxlen=BAR_COUNT)
-        # 0 = closed, 1 = fully open; drives width so the capsule unfurls.
-        # _open is the eased value that gets drawn, _open_t the linear progress
-        # behind it. Keeping them apart is what allows an ease at both ends
-        # instead of the asymptotic crawl a per-frame multiplier gives.
-        self._open = 0.0
-        self._open_t = 0.0
+        self._history = deque([0.0] * HISTORY, maxlen=HISTORY)
+        # Where the wave has rolled to, and how much of it is showing. The fade
+        # is what stops the sphere snapping awake and snapping still again.
+        self._phase = 0.0
+        self._fade = 0.0
         self._settled_painted = False
 
         self.setWindowFlags(
@@ -252,8 +207,8 @@ class Orb(QWidget):
         self.setWindowTitle("Relay")
 
         self.anchor_x, self.anchor_y = self._load_position()
-        self._apply_geometry(force=True)
-        self._refresh_icon()
+        self._apply_geometry()
+        self.app.setWindowIcon(build_icon())
         self.show()
         _make_non_activating(self)
 
@@ -262,22 +217,6 @@ class Orb(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(FRAME_MS)
-
-    # --- identity ---------------------------------------------------------
-
-    def _refresh_icon(self):
-        """Face the app icon the way the mark on screen faces.
-
-        The taskbar button and the dot are the same program; having one point
-        left while the other points right is exactly the mismatch the mark was
-        made adaptive to avoid. Redrawn only when the side actually changes,
-        which is a drag or a move between screens - not every frame.
-        """
-        mirrored = self._choose_direction()
-        if mirrored == self._icon_mirrored:
-            return
-        self._icon_mirrored = mirrored
-        self.app.setWindowIcon(build_icon(mirrored))
 
     # --- menu -------------------------------------------------------------
 
@@ -353,7 +292,7 @@ class Orb(QWidget):
             return int(data["x"]), int(data["y"])
         except Exception:
             screen = self.app.primaryScreen().availableGeometry()
-            return screen.right() - DOT_BOX - 40, screen.bottom() - DOT_BOX - 60
+            return screen.right() - ORB_SIZE - 40, screen.bottom() - ORB_SIZE - 60
 
     def _save_position(self):
         try:
@@ -363,56 +302,22 @@ class Orb(QWidget):
         except OSError:
             pass
 
-    def _visible_width(self):
-        return DOT_BOX + (CAPSULE_W - DOT_BOX) * self._open
-
     def _screen_geometry(self):
-        """The screen the dot is actually on, not just the primary one."""
+        """The screen the orb is actually on, not just the primary one."""
         screen = self.app.screenAt(QPoint(int(self.anchor_x), int(self.anchor_y)))
         return (screen or self.app.primaryScreen()).availableGeometry()
 
-    def _choose_direction(self):
-        """Open away from the closer edge. True means grow to the left.
-
-        Decided once, when the capsule starts to open, so it cannot flip
-        mid-animation. Re-evaluated on every open, which is what makes it
-        follow the dot after you drag it to the other side of the screen.
-        """
-        screen = self._screen_geometry()
-        needed = CAPSULE_W - DOT_BOX
-        room_right = screen.right() - (self.anchor_x + DOT_BOX)
-        room_left = self.anchor_x - screen.left()
-
-        if room_right >= needed and room_left < needed:
-            return False        # only the right fits
-        if room_left >= needed and room_right < needed:
-            return True         # only the left fits
-        # Either both sides fit or neither does; open towards the roomier one,
-        # which is the same as opening away from the nearer edge.
-        return room_left > room_right
-
-    def _apply_geometry(self, force=False):
-        """Size the window to the current open fraction, keeping the dot still."""
-        width = self._visible_width()
-        grow = width - DOT_BOX
-
-        if force:
-            self._grow_left = self._choose_direction()
-
-        x = self.anchor_x - grow if self._grow_left else self.anchor_x
+    def _apply_geometry(self):
+        """A fixed square. The sphere does not grow, so nothing here moves."""
         self.setGeometry(
-            int(x) - SHADOW_PAD,
+            int(self.anchor_x) - SHADOW_PAD,
             int(self.anchor_y) - SHADOW_PAD,
-            int(width) + 2 * SHADOW_PAD,
-            CAPSULE_H + 2 * SHADOW_PAD,
+            ORB_SIZE + 2 * SHADOW_PAD,
+            ORB_SIZE + 2 * SHADOW_PAD,
         )
 
-    def _dot_center(self):
-        """Where the dot sits inside the padded window."""
-        cy = SHADOW_PAD + CAPSULE_H / 2
-        if self._grow_left:
-            return SHADOW_PAD + self._visible_width() - DOT_BOX / 2, cy
-        return SHADOW_PAD + DOT_BOX / 2, cy
+    def _centre(self):
+        return SHADOW_PAD + ORB_SIZE / 2, SHADOW_PAD + ORB_SIZE / 2
 
     # --- input ------------------------------------------------------------
 
@@ -440,9 +345,6 @@ class Orb(QWidget):
         self._press_global = None
         if moved:
             self._save_position()
-            # Dragging across the middle of the screen flips which way the
-            # capsule will open, so the icon has to follow.
-            self._refresh_icon()
         else:
             self._fire_toggle()
 
@@ -494,46 +396,37 @@ class Orb(QWidget):
     # --- animation --------------------------------------------------------
 
     def _tick(self):
-        self._phase += 0.06
         self._frame += 1
+        listening = self.state in ("recording", "processing")
 
-        want_open = 1.0 if self.state in ("recording", "processing") else 0.0
-        if want_open > 0.0 and self._open_t <= 0.001:
-            # Pick the side now, while still closed, so the choice reflects
-            # wherever the dot has been dragged since the last dictation.
-            self._grow_left = self._choose_direction()
-            self._refresh_icon()   # in case the screen layout moved under us
-            # Start the meter from the mark's own shape, not from silence.
-            # After choosing the side, since the order depends on it.
-            self._history.clear()
-            self._history.extend(self._seed_levels())
+        # Ease the wave in and out rather than switching it on. Without this
+        # the sphere jumps from still to rippling in a single frame.
+        step = 1.0 / FADE_FRAMES
+        target = 1.0 if listening else 0.0
+        if self._fade != target:
+            self._fade = (min(target, self._fade + step) if target
+                          else max(target, self._fade - step))
 
-        if self._open_t != want_open:
-            # A fixed number of frames with a smoothstep on top, rather than a
-            # per-frame fraction of the remaining distance: that older form
-            # started at full speed and then crawled, so the capsule looked
-            # like it was being yanked open and easing shut.
-            step = 1.0 / OPEN_FRAMES
-            if want_open > self._open_t:
-                self._open_t = min(want_open, self._open_t + step)
-            else:
-                self._open_t = max(want_open, self._open_t - step)
-            self._open = _smoothstep(self._open_t)
-            self._apply_geometry()
+        if self._fade > 0.0:
+            self._phase += WAVE_SPEED
 
         if self._frame % SAMPLE_EVERY == 0:
             if self.state == "recording":
-                self._history.append(max(0.0, min(1.0, self.level_getter())))
+                level = max(0.0, min(1.0, self.level_getter()))
+                self._history.append(level ** LEVEL_CURVE)
             elif self.state == "processing":
-                self._history.append(0.30 + 0.22 * math.sin(self._phase * 2.6))
-            # Idle: leave the history alone. Feeding it zeros while the capsule
-            # is still closing would drag the bars down to nothing underneath
-            # the animation that is trying to return them to the mark.
+                # Nothing to listen to, so give it a pulse of its own rather
+                # than a flat line, or "working" looks identical to "idle".
+                self._history.append(
+                    0.35 + 0.30 * math.sin(self._frame * 0.11)
+                )
+            # Idle: leave the history alone. Feeding it zeros would drain the
+            # wave underneath the fade that is already taking it away.
 
-        # At rest the dot is a static circle, so redrawing it 60 times a second
-        # would burn CPU for no visible change on something that stays open all
-        # day. Paint the settled frame once, then stop until something moves.
-        settled = self.state == "idle" and self._open <= 0.001
+        # At rest the sphere is a still object, so redrawing it sixty times a
+        # second would burn CPU for no visible change on something that stays
+        # on screen all day. Paint the settled frame once, then stop.
+        settled = not listening and self._fade <= 0.0
         if settled and self._settled_painted:
             return
         self._settled_painted = settled
@@ -544,158 +437,45 @@ class Orb(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        accent = ACCENT
+        cx, cy = self._centre()
 
-        # The tile is always there now; it only widens into a capsule. Idle it
-        # carries the icon's own mark, so what floats on screen is recognisably
-        # the same thing as the taskbar button.
-        self._paint_capsule(painter)
-
-        self._paint_bars(painter, accent)
-
-        cx, cy = self._mark_dot_center()
-        self._paint_glow(painter, accent, cx, cy)
-
-        idle_r = DOT_BOX * ICON_DOT_R * MARK_SCALE
-        radius = idle_r + (DOT_R_OPEN - idle_r) * self._open
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(accent)
-        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+        self._paint_tile(painter, cx, cy)
+        paint_globe(painter, cx, cy, ORB_SIZE, self._level_at())
         painter.end()
 
-    def _mark_dot_center(self):
-        """Where the dot sits: inside the mark when idle, at the capsule's end
-        once it opens. Interpolated, so it slides rather than jumps."""
-        _, cy = self._dot_center()
-        idle_x = self._mark_x(ICON_DOT_X)
-        open_x, _ = self._dot_center()
-        return idle_x + (open_x - idle_x) * self._open, cy
+    def _level_at(self):
+        """What each ring is riding this frame.
 
-    def _tile_left(self):
-        return SHADOW_PAD + (self._visible_width() - DOT_BOX if self._grow_left else 0)
-
-    def _mark_x(self, fraction):
-        """An icon fraction placed in the circle, shrunk about its centre.
-
-        Mirrored when the capsule opens leftwards. The dot stays where you
-        clicked and the capsule grows away from it, so on the right of the
-        screen the dot ends up at the capsule's right end with the bars running
-        left. The resting mark has to face the same way, or it turns over
-        halfway through every dictation and the bars sweep across the dot.
+        The fade multiplies whatever the wave says, so the same function
+        serves the still sphere, the two hundred milliseconds either side of
+        it, and full listening.
         """
-        if self._grow_left:
-            fraction = 1.0 - fraction
-        return self._tile_left() + DOT_BOX * (0.5 + (fraction - 0.5) * MARK_SCALE)
+        if self._fade <= 0.0:
+            return lambda ring: 0.0
+        wave = sphere.wave(list(self._history), self._phase)
+        fade = self._fade
+        return lambda ring: wave(ring) * fade
 
-    def _bar_source(self, i):
-        """Which icon bar meter bar `i` grew out of.
+    def _paint_tile(self, painter, cx, cy):
+        """The disc the sphere sits on, plus a soft shadow beneath it."""
+        radius = ORB_SIZE / 2
 
-        Meter bars are numbered left to right, so when the row runs leftwards
-        from the dot the correspondence reverses: the bar nearest the dot is
-        the last one, not the first.
-        """
-        return BAR_SOURCE[BAR_COUNT - 1 - i] if self._grow_left else BAR_SOURCE[i]
-
-    def _seed_levels(self):
-        """The icon's heights as meter levels, in the current bar order."""
-        return [ICON_LEVEL[self._bar_source(i)] for i in range(BAR_COUNT)]
-
-    def _paint_capsule(self, painter):
-        """Translucent rounded background plus a soft shadow beneath it."""
-        rect = QRectF(
-            float(SHADOW_PAD), float(SHADOW_PAD),
-            self._visible_width(), float(CAPSULE_H),
-        )
-        # Fully round at every width: a circle at rest, and the same curve
-        # carried along as it stretches into a pill.
-        radius = CAPSULE_H / 2
-
-        # Cheap drop shadow: a few offset rounded rects at low alpha. Qt's
-        # graphics effect would need a second render pass for the same look.
+        # Cheap drop shadow: a few offset discs at low alpha. Qt's graphics
+        # effect would need a second render pass for the same look.
+        painter.setPen(Qt.NoPen)
         for i, alpha in enumerate((16, 12, 8)):
             spread = (i + 1) * 3
-            shadow = rect.adjusted(-spread, -spread + 3, spread, spread + 3)
-            painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(0, 0, 0, alpha))
-            painter.drawRoundedRect(shadow, radius + spread, radius + spread)
+            painter.drawEllipse(
+                QPointF(cx, cy + 3), radius + spread, radius + spread
+            )
 
-        # The icon's vertical gradient, not a flat fill: at rest this tile is
-        # the icon, and the two should not be noticeably different objects.
-        tile = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
-        top = QColor(*TILE_TOP_RGB, CAPSULE_ALPHA)
-        bottom = QColor(*TILE_BOTTOM_RGB, CAPSULE_ALPHA)
-        tile.setColorAt(0.0, top)
-        tile.setColorAt(1.0, bottom)
-        painter.setBrush(tile)
-        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
-        painter.drawRoundedRect(rect, radius, radius)
-
-    def _paint_glow(self, painter, accent, cx, cy):
-        """A true radial falloff - the thing tkinter could not do."""
-        # One strength for every state; only your voice moves it, so the halo
-        # breathes with the level without ever changing what colour it is.
-        strength = 70
-        gradient = QRadialGradient(cx, cy, GLOW_R)
-        inner = QColor(accent)
-        inner.setAlpha(int(strength * (0.5 + 0.5 * min(1.0, self.level_getter()))))
-        edge = QColor(accent)
-        edge.setAlpha(0)
-        gradient.setColorAt(0.0, inner)
-        gradient.setColorAt(1.0, edge)
-        painter.setPen(Qt.NoPen)
+        gradient = QLinearGradient(0.0, cy - radius, 0.0, cy + radius)
+        gradient.setColorAt(0.0, QColor(*TILE_TOP_RGB, TILE_ALPHA))
+        gradient.setColorAt(1.0, QColor(*TILE_BOTTOM_RGB, TILE_ALPHA))
         painter.setBrush(gradient)
-        painter.drawEllipse(QPoint(int(cx), int(cy)), int(GLOW_R), int(GLOW_R))
-
-    def _paint_bars(self, painter, accent):
-        """One row of bars that is the mark at rest and the meter once open.
-
-        Not two sets cross-fading: that left a moment in the middle where the
-        first had gone and the second had not arrived, and the orb blinked
-        every time you started or stopped. Each bar instead travels between
-        where the icon puts it and where the meter does, so there is always a
-        full row on screen and the mark simply unrolls.
-        """
-        cx, cy = self._dot_center()
-        # Tighter insets than before: in a capsule this narrow, the old 15-16px
-        # margins ate most of the room the bars need.
-        if self._grow_left:
-            left = SHADOW_PAD + 14
-            right = cx - 15
-        else:
-            left = cx + 15
-            right = SHADOW_PAD + self._visible_width() - 14
-
-        step = max(1.0, right - left) / (BAR_COUNT - 1)
-        open_w = self._open
-        icon_width = DOT_BOX * ICON_BAR_W * MARK_SCALE
-
-        for i, level in enumerate(self._history):
-            source = self._bar_source(i)
-
-            icon_x = self._mark_x(ICON_BAR_FIRST + source * ICON_BAR_STEP)
-            icon_half = DOT_BOX * ICON_BAR_H[source] * MARK_SCALE / 2
-            live_half = max(0.5, MAX_HALF * (level ** LEVEL_CURVE))
-
-            x = icon_x + (left + i * step - icon_x) * open_w
-            half = icon_half + (live_half - icon_half) * open_w
-            width = icon_width + (BAR_WIDTH - icon_width) * open_w
-
-            # Same hue throughout; only brightness follows the level, so a
-            # quiet bar reads as dimmer rather than as a different colour. At
-            # rest the icon's own emphasis takes over instead.
-            dim = _blend(accent, QColor(*CAPSULE_RGB), 0.45)
-            live_colour = _blend(dim, accent, min(1.0, half / MAX_HALF))
-            icon_colour = QColor(accent)
-            icon_colour.setAlpha(255 if source == 1 else 200)
-            colour = _blend(icon_colour, live_colour, open_w)
-            colour.setAlpha(int(icon_colour.alpha()
-                                + (255 - icon_colour.alpha()) * open_w))
-
-            painter.setPen(QPen(colour, width, Qt.SolidLine, Qt.RoundCap))
-            # Float coordinates, not int: the step is fractional, so truncating
-            # made the gaps alternate 2px/3px, and quantised bar heights to
-            # whole pixels so quiet speech moved them in visible jumps.
-            painter.drawLine(QPointF(x, cy - half), QPointF(x, cy + half))
+        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
     # --- lifecycle --------------------------------------------------------
 

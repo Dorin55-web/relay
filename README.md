@@ -82,24 +82,27 @@ small dot floating above your other windows.
 
 1. Click into the text box you want to dictate into, once.
 2. Press **F9**, or click the dot.
-3. Speak. The dot expands into a capsule whose bars ride your voice.
+3. Speak. Your voice rolls through the orb in bright rings.
 4. Press **F9** again to stop.
 
 Text appears as you speak, phrase by phrase. Nothing is submitted for you —
 press Enter yourself when you are happy with it.
 
-**The dot** can be dragged anywhere; its position is remembered.
+**The orb** is a globe of dots, and can be dragged anywhere; its position is
+remembered. At rest it is still and dim — a static object, not something
+blinking at you all day.
 
-It carries the same mark as the icon in your taskbar — a dot with three bars —
-and that mark faces the way the capsule is about to open. The capsule grows
-towards whichever side of the screen has room, and the dot itself stays put
-while it does, so near the right edge it opens leftwards with the dot at the
-right end. Drag it across the middle of the screen and the mark turns around,
-along with the taskbar icon.
+While it listens, the last second of your voice rolls through its rings from
+one pole to the other. Rings the wave passes push out, brighten and swell:
+position alone would be four pixels at this size and invisible, so brightness
+carries most of it. The resting sphere is deliberately half-lit for exactly
+that reason — at full brightness there would be no headroom for the wave to
+show in. It fades in and out over about a quarter of a second rather than
+switching.
 
-Starting and stopping is one movement rather than a swap: the three bars of the
-mark fan out into the eight of the level meter and gather back in, over about a
-quarter of a second, eased at both ends.
+The taskbar icon is the same globe, drawn from the same code, brighter and with
+fewer dots — two hundred of them on a sixteen pixel tile are sub-pixel smears
+that add up to a grey haze.
 
 ---
 
@@ -270,7 +273,8 @@ relay/
 ├── compose.py           the window you type into
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
-├── overlay.py           the floating dot and level meter (PySide6)
+├── overlay.py           the floating orb (PySide6)
+├── sphere.py            the globe of dots, and the wave through it
 ├── feedback.py          console status
 ├── logsetup.py          redirects output to the log when there is no console
 └── single_instance.py   refuses to start twice
