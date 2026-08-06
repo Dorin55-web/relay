@@ -32,9 +32,9 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
-from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
-                           QPainterPath, QPen, QPixmap)
-from PySide6.QtWidgets import QApplication, QMenu, QWidget
+from PySide6.QtGui import (QAction, QColor, QCursor, QIcon, QLinearGradient,
+                           QPainter, QPainterPath, QPen, QPixmap)
+from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
 
 from . import orbs, sphere
 from .config import DEFAULTS, normalise_orb
@@ -74,6 +74,11 @@ FRAME_MS = 33            # 30fps. These looks move slowly enough to read at
                          # this rate, and the orb animates all day: sixty
                          # would double the cost of that for no visible gain.
 CROSSFADE_FRAMES = 9     # about a third of a second, both looks drawn at once
+
+# How long the pointer has to sit still on a menu item before the whole prompt
+# behind its label appears. Long on purpose: this is for when you have stopped
+# and want to know what a template actually says, not for passing over it.
+TOOLTIP_REST_MS = 3500
 
 # How much louder speech hurries the look along, at full level.
 VOICE_URGENCY = 0.6
@@ -116,6 +121,18 @@ def paint_look(painter, left, top, size, look, clock, opacity=1.0):
     for x, y, _z, r, ink, alpha in sorted(dots, key=lambda d: d[2]):
         painter.setBrush(_ink(ink, alpha * opacity))
         painter.drawEllipse(QPointF(left + x, top + y), r, r)
+
+
+def _has_more_to_say(action):
+    """Whether resting on this item would show anything the label does not.
+
+    QAction.toolTip() falls back to the action's own text when none was set,
+    so every item in the menu claims to have one - the section headings, the
+    separators, Quit. Without this the reward for holding still on "Dictate
+    (F9)" is a small box reading "Dictate (F9)".
+    """
+    tip = action.toolTip().strip()
+    return bool(tip) and tip != action.text().strip()
 
 
 def _ink(ink, alpha):
@@ -300,8 +317,9 @@ class Orb(QWidget):
 
         The templates are numbered and grouped by the kind of work they start,
         so the one you want is found by position rather than by reading ten
-        similar sentences. Hovering shows the whole prompt: the labels are short
-        enough to scan, which means they are too short to be unambiguous.
+        similar sentences. Resting on one shows the whole prompt: the labels
+        are short enough to scan, which means they are too short to be
+        unambiguous.
 
         Rebuilt on every right-click rather than once at startup, so editing
         prompts.json takes effect at the next click instead of the next launch.
@@ -309,9 +327,18 @@ class Orb(QWidget):
         """
         if getattr(self, "menu", None) is None:
             self.menu = QMenu(self)
-            self.menu.setToolTipsVisible(True)
+            # Qt's own action tooltips are off, and this shows them itself on a
+            # timer instead. See _rest_on for why.
+            self.menu.setToolTipsVisible(False)
+            self.menu.hovered.connect(self._rest_on)
+            self.menu.aboutToHide.connect(self._forget_tip)
+            self._tip_timer = QTimer(self)
+            self._tip_timer.setSingleShot(True)
+            self._tip_timer.timeout.connect(self._show_tip)
+            self._tip_action = None
         else:
             self.menu.clear()
+            self._forget_tip()
 
         section = None
         for i, prompt in enumerate(prompts, start=1):
@@ -357,6 +384,41 @@ class Orb(QWidget):
         quit_act = QAction("Quit", self)
         quit_act.triggered.connect(self.quit)
         self.menu.addAction(quit_act)
+
+    # --- the prompt behind a label ----------------------------------------
+
+    def _rest_on(self, action):
+        # See _has_more_to_say: a QAction with no tooltip of its own reports
+        # its label as one.
+        """Start counting from when the pointer settles on an item.
+
+        Qt's own tooltips are on a much shorter fuse, and worse, once one has
+        been shown the next comes up almost immediately - so running an eye
+        down ten templates trailed a paragraph of prompt text after the
+        pointer the whole way. This only ever fires for an item you have
+        stopped on, and the count restarts from nothing every time you move.
+        """
+        self._forget_tip()
+        if action is not None and _has_more_to_say(action):
+            self._tip_action = action
+            self._tip_timer.start(TOOLTIP_REST_MS)
+
+    def _forget_tip(self):
+        self._tip_timer.stop()
+        self._tip_action = None
+        # Qt fades this out over about a third of a second whichever way it is
+        # asked, so it outlives the menu briefly. Passing empty text instead
+        # was tried and takes exactly as long.
+        QToolTip.hideText()
+
+    def _show_tip(self):
+        action = self._tip_action
+        if action is None or self.menu is None:
+            return
+        # Anchored to the item rather than to the pointer, so the text stays
+        # up while you read it and goes when you leave that row.
+        QToolTip.showText(QCursor.pos(), action.toolTip(), self.menu,
+                          self.menu.actionGeometry(action))
 
     # --- position ---------------------------------------------------------
 

@@ -210,8 +210,14 @@ grouped by the kind of work they start:
 | 9–10 | **Check** — test, and hand off to the next session |
 
 Click one and it goes straight into the box you last typed in — the same target
-dictation uses, so no clicking around first. Hover to see the whole prompt
-before you commit to it.
+dictation uses, so no clicking around first.
+
+**Stop on one for three and a half seconds** and the whole prompt appears, so
+you can read it before committing. It takes that long on purpose: Qt's own
+tooltips are quick, and quicker still once one has been shown, so running an
+eye down ten templates used to trail a paragraph of prompt text after the
+pointer the whole way. Moving at all starts the count again from nothing, and
+items whose tooltip would only repeat their own label never show one.
 
 Each is a skeleton with `<angle brackets>` where your specifics go. Inserting
 one never presses Enter, even with `auto_enter` on: the blanks are still in it.

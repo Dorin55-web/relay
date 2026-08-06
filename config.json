@@ -26,7 +26,7 @@
   "beep_feedback": false,
   "print_transcript": true,
   "orb": {
-    "size": 69,
+    "size": 73,
     "idle": {
       "look": "connecting",
       "speed": 1.11
