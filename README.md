@@ -103,6 +103,14 @@ background being dark. On a dark desktop or a dark editor they read cleanly, on
 white the far dots are dark enough to carry the shape on their own, and the
 weak case is a mid-grey window where neither end has much to work with.
 
+There is one thing behind them, and it is there to be clicked rather than seen.
+Windows decides what a click hits on a see-through window by looking at the
+alpha of that exact pixel, so with nothing under the dots, only the dots
+themselves could be clicked — 18% of the orb, and 5% when the look is an
+outline. That is what a dot that ignores two clicks out of three feels like.
+The backing is one part in 255: enough for the hit test, and a four-tenths of a
+percent change to what is behind it.
+
 There are nine to choose from, each animating in its own tile so the choice is
 something you look at rather than read:
 

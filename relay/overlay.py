@@ -49,6 +49,19 @@ DEFAULT_ORB_SIZE = DEFAULTS["orb"]["size"]
 # mark, and both are gone: nothing is drawn now except the dots themselves.
 EDGE_PAD = 4
 
+# Windows hit-tests a layered window - which is what a frameless translucent
+# Qt window is - against its per-pixel alpha, and a click on a fully
+# transparent pixel goes through to whatever is behind. With the disc gone,
+# only the dots themselves could be clicked: measured against the running orb,
+# 18% of it, in exactly the shape of the drawing. The rest landed in the
+# browser underneath.
+#
+# So the mark is backed by a disc that exists only to be hit. One in
+# two-hundred-and-fifty-five is the faintest that works - at zero the hit test
+# passes through and at one it does not - and at that alpha it darkens what is
+# behind it by four tenths of a percent.
+HIT_ALPHA = 1
+
 GLOBE_FILL = 0.82        # how much of the circle the icon's dots reach into
 MIN_DOT_PIXELS = 0.55    # floor, so a 16px icon still draws dots not haze
 
@@ -570,6 +583,7 @@ class Orb(QWidget):
         left = cx - self.orb_size / 2
         top = cy - self.orb_size / 2
 
+        self._paint_hit_area(painter, cx, cy)
         if self._leaving is not None:
             look, clock, remaining = self._leaving
             fading = remaining / CROSSFADE_FRAMES
@@ -580,6 +594,19 @@ class Orb(QWidget):
             paint_look(painter, left, top, self.orb_size, self._look,
                        self._clock)
         painter.end()
+
+    def _paint_hit_area(self, painter, cx, cy):
+        """Something to click on, between the dots. See HIT_ALPHA.
+
+        A disc rather than the whole window: the corners stay properly
+        transparent, so nothing behind them is blocked by a square of nothing.
+        It reaches a few pixels past the mark, which is the difference between
+        aiming at a forty pixel dot and aiming at a forty-eight pixel one.
+        """
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, HIT_ALPHA))
+        radius = self.orb_size / 2 + EDGE_PAD
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
     # --- lifecycle --------------------------------------------------------
 

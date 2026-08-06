@@ -26,9 +26,9 @@
   "beep_feedback": false,
   "print_transcript": true,
   "orb": {
-    "size": 64,
+    "size": 69,
     "idle": {
-      "look": "weaving",
+      "look": "connecting",
       "speed": 1.11
     },
     "recording": {
