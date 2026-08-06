@@ -121,7 +121,11 @@ def normalise_orb(settings):
     base = DEFAULTS["orb"]
     settings = settings if isinstance(settings, dict) else {}
 
-    out = {"size": orbs.nearest_size(settings.get("size", base["size"]))}
+    try:
+        size = orbs.clamp_size(settings.get("size", base["size"]))
+    except (TypeError, ValueError):
+        size = base["size"]
+    out = {"size": size}
     for slot in ORB_SLOTS:
         chosen = settings.get(slot)
         chosen = chosen if isinstance(chosen, dict) else {}

@@ -96,6 +96,13 @@ Drag it anywhere; its position is remembered. It animates the whole time it is
 on screen, and it wears **a different drawing in each of its three states** —
 resting, listening, working. Right-click it and pick **Change how it looks…**
 
+**Nothing is drawn but the dots.** There is no disc behind them and no shadow
+around them — the mark floats on whatever is underneath it. The one thing the
+disc used to buy was contrast: these are pale dots, and they lean on the
+background being dark. On a dark desktop or a dark editor they read cleanly, on
+white the far dots are dark enough to carry the shape on their own, and the
+weak case is a mid-grey window where neither end has much to work with.
+
 There are nine to choose from, each animating in its own tile so the choice is
 something you look at rather than read:
 
@@ -109,10 +116,22 @@ Each state also carries **its own speed**, from 0.1× to 3×, on top of whatever
 that look was tuned at. Out of the box: *breathing* while it waits, *listening*
 while you talk, *working* while it transcribes.
 
-Three **sizes**: 20px, 40px and 64px. The two ends are the original's own
-tunings — separate designs rather than one scaled, because a mark for a chat
-avatar and a mark for a line of text want different densities. The middle one
-is Relay's, blended between them.
+**Size is a slider**, 16 px to 120 px, whole pixels the whole way. It is not a
+choice between fixed steps because the drawings are not fixed at those steps:
+between **20 and 64** — the two sizes the originals were actually tuned at —
+the tuning itself is interpolated, so the mark is retuned as it grows rather
+than stretched. Fewer dots drawn larger as it shrinks, more dots drawn finer as
+it grows. The picker says which side of that span you are on.
+
+Past either end there is nothing left to interpolate towards, so the nearer
+drawing is simply magnified. Carrying the interpolation on would be worse than
+useless: the multipliers grow with size faster than linearly, and at 120 px the
+sash would resolve to nine thousand dots — forty times the frame cost, for a
+mark nobody could read anyway.
+
+Two things do *not* change when it is magnified: how fast it moves, and its
+proportions. The one exception is the smallest dots, which have a floor under
+them in real pixels and so do not scale past it.
 
 Changing state cross-fades over about a third of a second. The two drawings
 share no geometry at all, so cutting between them reads as the orb being
@@ -130,8 +149,8 @@ nothing.
 
 It runs at thirty frames a second rather than sixty. These looks move slowly
 enough to read at that rate, and something that animates all day should not
-cost twice what it needs to. The dearest of them is about 4.5 ms a frame, so
-the orb sits at roughly an eighth of one core.
+cost twice what it needs to. The dearest of them is about 3.6 ms a frame, so
+the orb sits at roughly a tenth of one core.
 
 The taskbar icon is a **still globe** of dots instead — a different drawing for
 a different job. An icon never moves and has to survive sixteen pixels, where

@@ -14,14 +14,14 @@ which is already on the GUI thread.
 
 import copy
 
-from PySide6.QtCore import QPointF, QRectF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QRectF, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QButtonGroup, QGridLayout, QHBoxLayout, QLabel,
                                QPushButton, QSlider, QVBoxLayout, QWidget)
 
 from . import orbs
 from .config import SLOT_LABELS, ORB_SLOTS, normalise_orb, save_orb
-from .overlay import TILE_BOTTOM_RGB, TILE_TOP_RGB, paint_look
+from .overlay import paint_look
 from .window import FramelessWindow, TitleBar
 
 # The orb's palette, so the two read as one program.
@@ -82,18 +82,11 @@ class LookTile(QWidget):
         painter.setBrush(QColor(PANEL))
         painter.drawPath(path)
 
-        # The same dark disc the orb sits on, so a tile is a fair preview
-        # rather than the drawing on some other background.
+        # Nothing behind the mark, because there is nothing behind it on the
+        # desktop either - the orb draws its dots and no backing at all.
         cx = TILE_W / 2
         cy = STAGE_H / 2 + 6
         radius = self.size_px / 2
-        gradient = QLinearGradient(0.0, cy - radius, 0.0, cy + radius)
-        gradient.setColorAt(0.0, QColor(*TILE_TOP_RGB))
-        gradient.setColorAt(1.0, QColor(*TILE_BOTTOM_RGB))
-        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
-        painter.setBrush(gradient)
-        painter.drawEllipse(QPointF(cx, cy), radius, radius)
-
         paint_look(painter, cx - radius, cy - radius, self.size_px,
                    self.look, self.clock)
 
@@ -118,6 +111,7 @@ class LookPicker(FramelessWindow):
         self._build()
         self.setStyleSheet(STYLESHEET)
         self._show_slot()
+        self._show_hint()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -145,7 +139,7 @@ class LookPicker(FramelessWindow):
         grid = QGridLayout()
         grid.setSpacing(8)
         for index, look in enumerate(orbs.LOOKS):
-            tile = LookTile(look, self.settings["size"])
+            tile = LookTile(look, min(self.settings["size"], orbs.TUNED_MAX))
             tile.picked.connect(self._choose_look)
             self.tiles[look] = tile
             grid.addWidget(tile, index // COLUMNS, index % COLUMNS)
@@ -168,23 +162,26 @@ class LookPicker(FramelessWindow):
         speed_row.addWidget(self.speed, 1)
         speed_row.addWidget(self.speed_label)
 
-        self.size_buttons = QButtonGroup(self)
-        self.size_buttons.setExclusive(True)
-        self.size_tabs = {}
+        self.size = QSlider(Qt.Horizontal)
+        self.size.setRange(orbs.MIN_SIZE, orbs.MAX_SIZE)
+        self.size.setSingleStep(1)
+        self.size.setPageStep(8)
+        self.size.setToolTip(
+            f"{orbs.MIN_SIZE} to {orbs.MAX_SIZE} pixels. Between "
+            f"{orbs.TUNED_MIN} and {orbs.TUNED_MAX} the drawing is retuned as "
+            f"it grows; past that it is magnified."
+        )
+        self.size.setValue(self.settings["size"])
+        self.size.valueChanged.connect(self._size_changed)
+        self.size_label = QLabel(f"{self.settings['size']} px")
+        self.size_label.setObjectName("value")
+        self.size_label.setFixedWidth(52)
+
         size_row = QHBoxLayout()
-        size_row.setSpacing(6)
+        size_row.setSpacing(10)
         size_row.addWidget(self._caption("SIZE"))
-        for size in orbs.SIZES:
-            button = QPushButton(f"{size}px")
-            button.setCheckable(True)
-            button.setChecked(size == self.settings["size"])
-            button.setToolTip("Tuned at this size" if size in orbs.TUNED_SIZES
-                              else "Between the two tuned sizes")
-            button.clicked.connect(
-                lambda checked=False, s=size: self._choose_size(s))
-            self.size_buttons.addButton(button)
-            self.size_tabs[size] = button
-            size_row.addWidget(button, 1)
+        size_row.addWidget(self.size, 1)
+        size_row.addWidget(self.size_label)
 
         close = QPushButton("Close")
         close.clicked.connect(self.close)
@@ -199,8 +196,9 @@ class LookPicker(FramelessWindow):
         )
         save.clicked.connect(self._save)
 
+        self.hint = self._hint("")
         footer = QHBoxLayout()
-        footer.addWidget(self._hint("Pick one for each state above"))
+        footer.addWidget(self.hint)
         footer.addStretch(1)
         footer.addWidget(close)
         footer.addWidget(save)
@@ -222,6 +220,11 @@ class LookPicker(FramelessWindow):
                                  self.close))
         outer.addLayout(body, 1)
 
+        # The window never resizes, so it has to be measured against the
+        # longest thing the hint will ever say - not against whichever one it
+        # happens to be showing when the layout is first asked how big it is.
+        self.hint.setText(f"Above {orbs.TUNED_MAX} px: the largest drawing, "
+                          f"magnified")
         self.setFixedSize(self.sizeHint())
 
     def _caption(self, text):
@@ -252,12 +255,37 @@ class LookPicker(FramelessWindow):
         self._show_slot()
         self._apply()
 
-    def _choose_size(self, size):
+    def _size_changed(self, value):
+        size = orbs.clamp_size(value)
         self.settings["size"] = size
-        self.size_tabs[size].setChecked(True)
+        self.size_label.setText(f"{size} px")
+        self._show_hint()
+        # A tile is 118 pixels wide, so past the tuned maximum the preview
+        # stops growing. Nothing is hidden by that: above it the drawing IS
+        # the 64px one magnified, so the tile shows the same design, and the
+        # orb on screen is following the slider anyway.
         for tile in self.tiles.values():
-            tile.set_size(size)
+            tile.set_size(min(size, orbs.TUNED_MAX))
         self._apply()
+
+    def _show_hint(self):
+        """Say when the size has left the span the drawings were tuned in.
+
+        Between the two tuned sizes the mark is retuned as it grows - fewer
+        dots, drawn larger, as it gets smaller - and outside them there is
+        nothing to retune towards, so it is simply magnified. That is a real
+        difference in what the slider is doing, and it is invisible unless
+        something says so.
+        """
+        size = self.settings["size"]
+        if size < orbs.TUNED_MIN:
+            self.hint.setText(f"Below {orbs.TUNED_MIN} px: the smallest "
+                              f"drawing, shrunk")
+        elif size > orbs.TUNED_MAX:
+            self.hint.setText(f"Above {orbs.TUNED_MAX} px: the largest "
+                              f"drawing, magnified")
+        else:
+            self.hint.setText("Pick one for each state above")
 
     def _speed_changed(self, value):
         if self._loading:

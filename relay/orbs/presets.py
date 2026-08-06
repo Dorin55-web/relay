@@ -7,8 +7,9 @@ so the drawing code only ever sees plain numbers.
 
 The two sizes are separate designs rather than one scaled - a mark for a chat
 avatar and a mark for a line of text want different densities, not the same
-density at different radii. The middle size here is Relay's own, blended
-between them; it is called out as a blend because it is not their tuning.
+density at different radii. Relay's size slider is continuous, so every size
+between them is blended from both; those blends are Relay's, not the original's
+tuning.
 """
 
 from .profiles import BASE_PROFILES, scale_counts, scale_radii
@@ -42,11 +43,20 @@ LOOK_BLURBS = {
     "shaping": "an outline cycling through shapes",
 }
 
-TUNED_SIZES = (20, 64)
-# The middle one is Relay's. 40 rather than 42 because it is a size a window
-# can actually be without half-pixels at 125% and 150% display scaling.
-BLENDED_SIZE = 40
-SIZES = (20, BLENDED_SIZE, 64)
+# The two sizes the drawings were actually tuned at. Between them the tuning
+# is interpolated, so any size in this span is a real design rather than one
+# of the two scaled. Outside it there is nothing to interpolate towards, and
+# `frame` magnifies the nearer tuning instead of extrapolating - see there for
+# why extrapolating is not an option.
+TUNED_MIN = 20
+TUNED_MAX = 64
+TUNED_SIZES = (TUNED_MIN, TUNED_MAX)
+
+# What the size slider may ask for. The bottom is where the orb stops being
+# something you can aim a mouse at; the top is well past what a dot floating
+# over other windows wants to be.
+MIN_SIZE = 16
+MAX_SIZE = 120
 
 # What the user's speed dial may ask for, on top of a look's own tuning.
 MIN_SPEED = 0.1
@@ -110,9 +120,9 @@ def _blend(small, large, f):
 
 
 def _blended_tuning(mode, size):
-    small_speed, small_count, small_size, small_extra = _TUNINGS[mode][20]
-    big_speed, big_count, big_size, big_extra = _TUNINGS[mode][64]
-    f = (size - 20) / (64 - 20)
+    small_speed, small_count, small_size, small_extra = _TUNINGS[mode][TUNED_MIN]
+    big_speed, big_count, big_size, big_extra = _TUNINGS[mode][TUNED_MAX]
+    f = (size - TUNED_MIN) / (TUNED_MAX - TUNED_MIN)
     extra = {
         key: _blend(small_extra[key], big_extra.get(key, small_extra[key]), f)
         for key in small_extra
@@ -157,6 +167,16 @@ def clamp_speed(speed):
     return max(MIN_SPEED, min(MAX_SPEED, float(speed)))
 
 
-def nearest_size(size):
-    """The offered size closest to what was asked for."""
-    return min(SIZES, key=lambda s: abs(s - int(size)))
+def clamp_size(size):
+    """Whole pixels, inside what the slider offers.
+
+    Whole because the tunings are resolved per size and cached, and a slider
+    that produced fractions would fill that cache with values nobody can tell
+    apart.
+    """
+    return max(MIN_SIZE, min(MAX_SIZE, int(round(float(size)))))
+
+
+def tuned_size(size):
+    """The size whose tuning to draw with, for a mark this big."""
+    return max(TUNED_MIN, min(TUNED_MAX, size))

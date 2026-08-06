@@ -9,13 +9,20 @@ Speaking hurries whichever look is on. That is one handle rather than nine
 per-look ones, and it is the only one all of them have in common - a lattice
 has rings to ripple, a constellation has none.
 
+Nothing is drawn but the dots. There was a dark disc under them and a soft
+shadow around it, which made the orb an object sitting on the desktop; without
+them it is just the drawing, floating. The one thing that buys the disc back
+is legibility over a light window - these are pale dots - so if that ever
+matters more than the look, this is where it went.
+
 The taskbar and window icon is the still globe in `sphere` instead - a
 different drawing for a different job. An icon never moves and has to survive
 sixteen pixels, where these looks are hundreds of sub-pixel dots and no shape.
+It keeps its tile, because a taskbar button is a tile.
 
-Built on PySide6 rather than tkinter for real alpha. The window is padded by
-SHADOW_PAD on every side so the shadow has somewhere to fall; all drawing is
-inset by that margin, and the saved position always refers to the visible orb
+Built on PySide6 rather than tkinter for real alpha. The window is a few
+pixels larger than the mark on every side so the outermost dot's antialiased
+edge is not clipped; the saved position always refers to the visible orb
 rather than the padded window.
 """
 
@@ -37,7 +44,11 @@ POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
 ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
 DEFAULT_ORB_SIZE = DEFAULTS["orb"]["size"]
-SHADOW_PAD = 12          # room around the artwork for the drop shadow
+# Just enough room that the outermost dot's antialiased edge is not clipped by
+# the window. There used to be a shadow out here, and a dark disc under the
+# mark, and both are gone: nothing is drawn now except the dots themselves.
+EDGE_PAD = 4
+
 GLOBE_FILL = 0.82        # how much of the circle the icon's dots reach into
 MIN_DOT_PIXELS = 0.55    # floor, so a 16px icon still draws dots not haze
 
@@ -61,9 +72,10 @@ LEVEL_RELEASE = 0.06
 LEVEL_CURVE = 0.7        # quiet speech still moves the orb visibly
 
 
-TILE_TOP_RGB = (32, 36, 46)      # the look is drawn over this gradient
+# The tile behind the icon in the taskbar. The orb on the desktop has no
+# backing at all any more; this is only for the square button.
+TILE_TOP_RGB = (32, 36, 46)
 TILE_BOTTOM_RGB = (13, 15, 20)
-TILE_ALPHA = 232
 
 # One colour, in every state. The look changing is the signal, so the orb
 # never needs a hue to say anything.
@@ -94,7 +106,13 @@ def paint_look(painter, left, top, size, look, clock, opacity=1.0):
 
 
 def _ink(ink, alpha):
-    """The drawings are inked for paper, 0 darkest. This is a dark tile."""
+    """The drawings are inked for paper, 0 darkest, and this is not paper.
+
+    Mirroring is what makes the near dots the bright ones, which is the whole
+    of the depth language on a dark substrate. It assumes what is behind is
+    dark - true of the taskbar tile and of most desktops, and the reason the
+    orb goes faint over a white window.
+    """
     grey = round((1.0 - min(1.0, max(0.0, ink))) * 255)
     colour = QColor(grey, grey, grey)
     colour.setAlphaF(min(1.0, max(0.0, alpha)))
@@ -366,16 +384,16 @@ class Orb(QWidget):
         return (screen or self.app.primaryScreen()).availableGeometry()
 
     def _apply_geometry(self):
-        """A fixed square. The orb never changes size, so nothing here moves."""
+        """A square around the anchor. Only the size slider ever changes it."""
         self.setGeometry(
-            int(self.anchor_x) - SHADOW_PAD,
-            int(self.anchor_y) - SHADOW_PAD,
-            self.orb_size + 2 * SHADOW_PAD,
-            self.orb_size + 2 * SHADOW_PAD,
+            int(self.anchor_x) - EDGE_PAD,
+            int(self.anchor_y) - EDGE_PAD,
+            self.orb_size + 2 * EDGE_PAD,
+            self.orb_size + 2 * EDGE_PAD,
         )
 
     def _centre(self):
-        half = SHADOW_PAD + self.orb_size / 2
+        half = EDGE_PAD + self.orb_size / 2
         return half, half
 
     # --- input ------------------------------------------------------------
@@ -484,14 +502,21 @@ class Orb(QWidget):
         The orb keeps running while the picker is open, so this has to cope
         with the size changing underneath it: the window is resized around the
         same anchor, and the position is left where the user put it.
+
+        This runs on every step of the size slider, which is why the position
+        is only written when growing has actually pushed the orb off the edge
+        and moved it. Saving unconditionally would rewrite the file on every
+        pixel of a drag.
         """
         self.orb_settings = normalise_orb(settings)
         if self.orb_settings["size"] != self.orb_size:
             self.orb_size = self.orb_settings["size"]
+            was = (self.anchor_x, self.anchor_y)
             self.anchor_x, self.anchor_y = self._on_screen(
                 self.anchor_x, self.anchor_y)
             self._apply_geometry()
-            self._save_position()
+            if (self.anchor_x, self.anchor_y) != was:
+                self._save_position()
         self._change_look(self._look_for(self.state))
         self.update()
 
@@ -545,7 +570,6 @@ class Orb(QWidget):
         left = cx - self.orb_size / 2
         top = cy - self.orb_size / 2
 
-        self._paint_tile(painter, cx, cy)
         if self._leaving is not None:
             look, clock, remaining = self._leaving
             fading = remaining / CROSSFADE_FRAMES
@@ -556,32 +580,6 @@ class Orb(QWidget):
             paint_look(painter, left, top, self.orb_size, self._look,
                        self._clock)
         painter.end()
-
-    def _paint_tile(self, painter, cx, cy):
-        """The disc the sash turns over, plus a soft shadow beneath it.
-
-        Not in the drawing this was taken from, which sits on a page whose
-        colour it already knows. A desktop overlay lands on anything, and
-        light-grey dots on a white window are not there at all.
-        """
-        radius = self.orb_size / 2
-
-        # Cheap drop shadow: a few offset discs at low alpha. Qt's graphics
-        # effect would need a second render pass for the same look.
-        painter.setPen(Qt.NoPen)
-        for i, alpha in enumerate((16, 12, 8)):
-            spread = (i + 1) * 3
-            painter.setBrush(QColor(0, 0, 0, alpha))
-            painter.drawEllipse(
-                QPointF(cx, cy + 3), radius + spread, radius + spread
-            )
-
-        gradient = QLinearGradient(0.0, cy - radius, 0.0, cy + radius)
-        gradient.setColorAt(0.0, QColor(*TILE_TOP_RGB, TILE_ALPHA))
-        gradient.setColorAt(1.0, QColor(*TILE_BOTTOM_RGB, TILE_ALPHA))
-        painter.setBrush(gradient)
-        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
-        painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
     # --- lifecycle --------------------------------------------------------
 
