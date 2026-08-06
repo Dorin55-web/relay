@@ -1,14 +1,14 @@
-"""A small always-on-top indicator: a globe of dots your voice rolls through.
+"""A small always-on-top indicator: a sash of dots turning over a dark ball.
 
-At rest it is a still, dim sphere. While it listens, the last second of your
-voice travels through its rings from one pole to the other - the rings it
-passes push out, brighten and swell, so the movement reads at 48 pixels where a
-purely geometric ripple would be four pixels and invisible.
+The orb runs its undulation the whole time it is on screen. Speaking deepens
+it - the sash twists harder and lifts - and the twist eases back down when you
+stop, so the difference between resting and listening is a change of intensity
+rather than a change of shape.
 
-The sphere never changes shape. An earlier version opened sideways into a
-capsule, which brought a direction to choose, a mark to mirror and a geometry to
-animate; a ball has no handedness and no width, so all of that is gone and the
-window is a fixed square.
+Two dot drawings live here for two different jobs. The orb is the sash, at 64
+pixels, moving. The taskbar and window icon is the still globe in `sphere`,
+which has to stay legible down to sixteen pixels; the sash frozen at that size
+is five hundred sub-pixel dots and no shape at all.
 
 Built on PySide6 rather than tkinter for real alpha. The window is padded by
 SHADOW_PAD on every side so the shadow has somewhere to fall; all drawing is
@@ -20,7 +20,6 @@ import ctypes
 import json
 import math
 import sys
-from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
@@ -28,55 +27,80 @@ from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
-from . import sphere
+from . import ribbon, sphere
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
 ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
-ORB_SIZE = 48            # the sphere's diameter on screen
+ORB_SIZE = 64            # the sash was tuned at this size; smaller and its
+                         # dots fall under a pixel and blur into a smudge
 SHADOW_PAD = 12          # room around the artwork for the drop shadow
-GLOBE_FILL = 0.82        # how much of the circle the dots reach into
+GLOBE_FILL = 0.82        # how much of the circle the icon's dots reach into
 MIN_DOT_PIXELS = 0.55    # floor, so a 16px icon still draws dots not haze
 
 # The taskbar wants a square tile, which is what every other app icon is.
 ICON_INSET = 0.03
 ICON_RADIUS = 0.23
-ICON_LIFT = 2.4          # the icon is drawn brighter than the resting orb
+ICON_LIFT = 2.4          # the icon is drawn brighter than the orb sits at
 
-SAMPLE_EVERY = 4         # frames per level sample; the wave then spans ~0.5s
-FRAME_MS = 16            # 60fps: Qt can afford it and the motion reads smoother
-LEVEL_CURVE = 0.7        # quiet speech still moves the wave visibly
+FRAME_MS = 33            # 30fps. The undulation is slow enough to read at
+                         # this rate, and the orb animates all day: sixty
+                         # would double the cost of that for no visible gain.
 
-# Samples the wave carries. One per ring would tie the two together; a few more
-# lets the wave travel through the rings rather than sit on them.
-HISTORY = 10
-# How fast the wave rolls, in samples per frame. Slow enough to follow, fast
-# enough that it is plainly moving.
-WAVE_SPEED = 0.055
-# The wave fades in and out over this many frames when listening starts and
-# stops, so the sphere wakes rather than snapping.
-FADE_FRAMES = 14
+# What speaking does to the sash: it twists harder. Brightening was tried
+# alongside and dropped - the tuning already draws the near dots at full alpha,
+# so a lift only reaches the far ones and moved the ink on screen by five
+# percent, which is not a signal.
+VOICE_WOBBLE = 0.9       # extra undulation at full level
+
+# The level is smoothed asymmetrically: quick to follow a syllable starting,
+# slow to let go, so the sash rides speech instead of flickering with it.
+LEVEL_ATTACK = 0.35
+LEVEL_RELEASE = 0.06
+LEVEL_CURVE = 0.7        # quiet speech still moves the sash visibly
+
+# Nothing to listen to while the transcription runs, so it gets a pulse of its
+# own - otherwise working looks exactly like waiting.
+WORK_PULSE_RATE = 2.2
+WORK_PULSE_LOW = 0.30
+WORK_PULSE_SPAN = 0.35
 
 
-TILE_TOP_RGB = (32, 36, 46)      # the sphere sits on this gradient
+TILE_TOP_RGB = (32, 36, 46)      # the sash turns over this gradient
 TILE_BOTTOM_RGB = (13, 15, 20)
 TILE_ALPHA = 232
 
-# One colour, in every state. The wave rolling through the sphere is the signal
-# for listening, so the orb never needs to change hue to say anything.
+# One colour, in every state. The sash deepening is the signal for listening,
+# so the orb never needs to change hue to say anything.
 ACCENT = QColor("#e8ebf0")
 
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def paint_globe(painter, cx, cy, diameter, level_at, lift=1.0):
-    """The dotted sphere, centred on cx/cy. The one drawing everything uses.
+def paint_ribbon(painter, cx, cy, diameter, t, wobble=1.0):
+    """The sash, centred on cx/cy. Far dots first, so near ones land on top.
+
+    The ink the geometry hands back is 0 for darkest, which is the convention
+    it was drawn in on paper; the orb is a dark tile, so it comes out mirrored.
+    """
+    painter.setPen(Qt.NoPen)
+    for x, y, _depth, r, ink, alpha in sorted(
+            ribbon.dots(t, diameter, wobble), key=lambda d: d[2]):
+        grey = round((1.0 - min(1.0, max(0.0, ink))) * 255)
+        colour = QColor(grey, grey, grey)
+        colour.setAlphaF(min(1.0, alpha))
+        painter.setBrush(colour)
+        painter.drawEllipse(QPointF(cx + x, cy + y), r, r)
+
+
+def paint_globe(painter, cx, cy, diameter, lift=1.0):
+    """The dotted sphere, centred on cx/cy - the icon's drawing.
 
     Far dots are drawn first so the near ones land on top of them, which is
     the whole of the depth sorting a sphere this size needs. `lift` brightens
-    the lot: the orb wants to sit quietly at rest, an icon has to be legible
-    in a taskbar, and those are different jobs for the same drawing.
+    the lot, because an icon has to be legible in a taskbar rather than sit
+    quietly on a desktop.
     """
     radius = diameter / 2
     reach = radius * GLOBE_FILL
@@ -85,15 +109,14 @@ def paint_globe(painter, cx, cy, diameter, level_at, lift=1.0):
     # sub-pixel dots and come out as a grey haze.
     spread = sphere.EQUATOR_DOTS / equator
     painter.setPen(Qt.NoPen)
-    for x, y, depth, _ring, level in sorted(
-            sphere.dots(level_at, rings=rings, equator=equator),
-            key=lambda d: d[2]):
+    for x, y, depth in sorted(
+            sphere.dots(rings=rings, equator=equator), key=lambda d: d[2]):
         colour = QColor(ACCENT)
-        colour.setAlphaF(min(1.0, sphere.dot_alpha(depth, level) * lift))
+        colour.setAlphaF(min(1.0, sphere.dot_alpha(depth) * lift))
         painter.setBrush(colour)
         # And never below half a pixel, or antialiasing turns the dot into a
         # faint stain rather than a dot.
-        r = max(MIN_DOT_PIXELS, sphere.dot_radius(depth, level, spread) * radius)
+        r = max(MIN_DOT_PIXELS, sphere.dot_radius(depth, spread) * radius)
         painter.drawEllipse(QPointF(cx + x * reach, cy - y * reach), r, r)
 
 
@@ -126,7 +149,7 @@ def _icon_pixmap(size):
 
     # A still globe, but brighter than the orb sits at: an icon is an identity
     # mark in a taskbar, not something being unobtrusive on a desktop.
-    paint_globe(painter, s / 2, s / 2, s * 0.94, lambda ring: 0.0, lift=ICON_LIFT)
+    paint_globe(painter, s / 2, s / 2, s * 0.94, lift=ICON_LIFT)
     painter.end()
     return pixmap
 
@@ -189,12 +212,10 @@ class Orb(QWidget):
         self._frame = 0
         self._press_global = None
         self._press_origin = None
-        self._history = deque([0.0] * HISTORY, maxlen=HISTORY)
-        # Where the wave has rolled to, and how much of it is showing. The fade
-        # is what stops the sphere snapping awake and snapping still again.
-        self._phase = 0.0
-        self._fade = 0.0
-        self._settled_painted = False
+        # The sash's own clock, in the units its geometry is written in, and
+        # the smoothed level driving how hard it twists.
+        self._clock = 0.0
+        self._level = 0.0
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -289,10 +310,24 @@ class Orb(QWidget):
     def _load_position(self):
         try:
             data = json.loads(POSITION_FILE.read_text(encoding="utf-8"))
-            return int(data["x"]), int(data["y"])
+            return self._on_screen(int(data["x"]), int(data["y"]))
         except Exception:
             screen = self.app.primaryScreen().availableGeometry()
             return screen.right() - ORB_SIZE - 40, screen.bottom() - ORB_SIZE - 60
+
+    def _on_screen(self, x, y):
+        """Pull a saved position back inside the display it was saved on.
+
+        The position is the orb's top-left corner, so a saved one from when
+        the orb was smaller now hangs off the edge by the difference - and a
+        monitor that has since been unplugged puts it nowhere at all.
+        """
+        screen = self.app.screenAt(QPoint(x, y))
+        area = (screen or self.app.primaryScreen()).availableGeometry()
+        return (
+            max(area.left(), min(x, area.right() - ORB_SIZE)),
+            max(area.top(), min(y, area.bottom() - ORB_SIZE)),
+        )
 
     def _save_position(self):
         try:
@@ -308,7 +343,7 @@ class Orb(QWidget):
         return (screen or self.app.primaryScreen()).availableGeometry()
 
     def _apply_geometry(self):
-        """A fixed square. The sphere does not grow, so nothing here moves."""
+        """A fixed square. The orb never changes size, so nothing here moves."""
         self.setGeometry(
             int(self.anchor_x) - SHADOW_PAD,
             int(self.anchor_y) - SHADOW_PAD,
@@ -383,13 +418,12 @@ class Orb(QWidget):
     def set_state(self, state):
         # Only touches plain attributes; the timer repaints on the GUI thread.
         self.state = state
-        self._settled_painted = False
 
     def flash(self, kind):
         """Kept so callers need not care, but deliberately does nothing.
 
-        Success and failure used to tint the dot green or red. The capsule
-        closing already says the dictation finished, and the log says how it
+        Success and failure used to tint the dot green or red. The sash
+        settling already says the dictation finished, and the log says how it
         went, so a colour change here only added noise.
         """
 
@@ -397,40 +431,25 @@ class Orb(QWidget):
 
     def _tick(self):
         self._frame += 1
-        listening = self.state in ("recording", "processing")
-
-        # Ease the wave in and out rather than switching it on. Without this
-        # the sphere jumps from still to rippling in a single frame.
-        step = 1.0 / FADE_FRAMES
-        target = 1.0 if listening else 0.0
-        if self._fade != target:
-            self._fade = (min(target, self._fade + step) if target
-                          else max(target, self._fade - step))
-
-        if self._fade > 0.0:
-            self._phase += WAVE_SPEED
-
-        if self._frame % SAMPLE_EVERY == 0:
-            if self.state == "recording":
-                level = max(0.0, min(1.0, self.level_getter()))
-                self._history.append(level ** LEVEL_CURVE)
-            elif self.state == "processing":
-                # Nothing to listen to, so give it a pulse of its own rather
-                # than a flat line, or "working" looks identical to "idle".
-                self._history.append(
-                    0.35 + 0.30 * math.sin(self._frame * 0.11)
-                )
-            # Idle: leave the history alone. Feeding it zeros would drain the
-            # wave underneath the fade that is already taking it away.
-
-        # At rest the sphere is a still object, so redrawing it sixty times a
-        # second would burn CPU for no visible change on something that stays
-        # on screen all day. Paint the settled frame once, then stop.
-        settled = not listening and self._fade <= 0.0
-        if settled and self._settled_painted:
-            return
-        self._settled_painted = settled
+        self._clock += ribbon.SPEED * FRAME_MS / 1000.0
+        target = self._target_level()
+        # Fast towards a louder level, slow away from it. Symmetric smoothing
+        # either lags the start of a word or chatters through the gaps between
+        # them; there is no single rate that does both.
+        glide = LEVEL_ATTACK if target > self._level else LEVEL_RELEASE
+        self._level += (target - self._level) * glide
         self.update()
+
+    def _target_level(self):
+        """How hard the sash should be twisting, before smoothing."""
+        if self.state == "recording":
+            level = max(0.0, min(1.0, self.level_getter()))
+            return level ** LEVEL_CURVE
+        if self.state == "processing":
+            return WORK_PULSE_LOW + WORK_PULSE_SPAN * (
+                0.5 + 0.5 * math.sin(self._clock * WORK_PULSE_RATE)
+            )
+        return 0.0
 
     # --- painting ---------------------------------------------------------
 
@@ -440,24 +459,17 @@ class Orb(QWidget):
         cx, cy = self._centre()
 
         self._paint_tile(painter, cx, cy)
-        paint_globe(painter, cx, cy, ORB_SIZE, self._level_at())
+        paint_ribbon(painter, cx, cy, ORB_SIZE, self._clock,
+                     1.0 + VOICE_WOBBLE * self._level)
         painter.end()
 
-    def _level_at(self):
-        """What each ring is riding this frame.
-
-        The fade multiplies whatever the wave says, so the same function
-        serves the still sphere, the two hundred milliseconds either side of
-        it, and full listening.
-        """
-        if self._fade <= 0.0:
-            return lambda ring: 0.0
-        wave = sphere.wave(list(self._history), self._phase)
-        fade = self._fade
-        return lambda ring: wave(ring) * fade
-
     def _paint_tile(self, painter, cx, cy):
-        """The disc the sphere sits on, plus a soft shadow beneath it."""
+        """The disc the sash turns over, plus a soft shadow beneath it.
+
+        Not in the drawing this was taken from, which sits on a page whose
+        colour it already knows. A desktop overlay lands on anything, and
+        light-grey dots on a white window are not there at all.
+        """
         radius = ORB_SIZE / 2
 
         # Cheap drop shadow: a few offset discs at low alpha. Qt's graphics

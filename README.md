@@ -82,27 +82,35 @@ small dot floating above your other windows.
 
 1. Click into the text box you want to dictate into, once.
 2. Press **F9**, or click the dot.
-3. Speak. Your voice rolls through the orb in bright rings.
+3. Speak. The orb's sash twists harder as it hears you.
 4. Press **F9** again to stop.
 
 Text appears as you speak, phrase by phrase. Nothing is submitted for you —
 press Enter yourself when you are happy with it.
 
-**The orb** is a globe of dots, and can be dragged anywhere; its position is
-remembered. At rest it is still and dim — a static object, not something
-blinking at you all day.
+**The orb** is a sash of dots turning over a dark ball, and can be dragged
+anywhere; its position is remembered.
 
-While it listens, the last second of your voice rolls through its rings from
-one pole to the other. Rings the wave passes push out, brighten and swell:
-position alone would be four pixels at this size and invisible, so brightness
-carries most of it. The resting sphere is deliberately half-lit for exactly
-that reason — at full brightness there would be no headroom for the wave to
-show in. It fades in and out over about a quarter of a second rather than
-switching.
+It undulates the whole time it is on screen. Speaking deepens it — the strands
+are pulled about twice as far off their band — and the twist eases back down
+when you stop, quickly on the way up so it catches the start of a word, slowly
+on the way down so it rides speech instead of flickering through the gaps.
+Brightening it was tried alongside and dropped: the drawing already has its
+near dots at full opacity, so a lift only reached the far ones and moved five
+percent of the ink.
 
-The taskbar icon is the same globe, drawn from the same code, brighter and with
-fewer dots — two hundred of them on a sixteen pixel tile are sub-pixel smears
-that add up to a grey haze.
+It runs at thirty frames a second rather than sixty. The undulation is slow
+enough to read at that rate, and something that animates all day should not
+cost twice what it needs to; a frame is about 4 ms, so the orb sits at roughly
+a tenth of one core.
+
+The taskbar icon is a **still globe** of dots instead — a different drawing for
+a different job. An icon never moves and has to survive sixteen pixels, where
+the sash is five hundred sub-pixel dots and no shape at all.
+
+The sash is ported from [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs)
+(MIT, see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) — its *composing*
+state at 1.1× speed, redrawn in QPainter so Relay keeps its dependencies.
 
 ---
 
@@ -274,16 +282,16 @@ relay/
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating orb (PySide6)
-├── sphere.py            the globe of dots, and the wave through it
+├── ribbon.py            the sash of dots it draws
+├── sphere.py            the still globe the icon is drawn from
 ├── feedback.py          console status
 ├── logsetup.py          redirects output to the log when there is no console
 └── single_instance.py   refuses to start twice
 ```
 
 The icon in the taskbar is drawn at run time rather than loaded from that file,
-from the same fractions as the dot on screen, so the two always face the same
-way. The file is only for the shortcuts — a `.lnk` resolves its icon once and
-cannot follow anything.
+so it is always in step with the code. The file is only for the shortcuts — a
+`.lnk` resolves its icon once and cannot follow anything.
 
 ### Six things that are less obvious than they look
 
