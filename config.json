@@ -26,10 +26,10 @@
   "beep_feedback": false,
   "print_transcript": true,
   "orb": {
-    "size": 40,
+    "size": 64,
     "idle": {
       "look": "weaving",
-      "speed": 1.0
+      "speed": 1.11
     },
     "recording": {
       "look": "composing",

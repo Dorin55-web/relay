@@ -223,8 +223,10 @@ class LookPicker(FramelessWindow):
         # The window never resizes, so it has to be measured against the
         # longest thing the hint will ever say - not against whichever one it
         # happens to be showing when the layout is first asked how big it is.
-        self.hint.setText(f"Above {orbs.TUNED_MAX} px: the largest drawing, "
-                          f"magnified")
+        # A minimum width, not just the text: the footer has a stretch in it,
+        # and the label is what gets squeezed when the layout is short.
+        self.hint.setText(max(self._hints(), key=len))
+        self.hint.setMinimumWidth(self.hint.sizeHint().width())
         self.setFixedSize(self.sizeHint())
 
     def _caption(self, text):
@@ -268,24 +270,26 @@ class LookPicker(FramelessWindow):
             tile.set_size(min(size, orbs.TUNED_MAX))
         self._apply()
 
-    def _show_hint(self):
-        """Say when the size has left the span the drawings were tuned in.
+    def _hints(self):
+        """Everything the hint can say: below the span, inside it, above it.
 
         Between the two tuned sizes the mark is retuned as it grows - fewer
-        dots, drawn larger, as it gets smaller - and outside them there is
-        nothing to retune towards, so it is simply magnified. That is a real
-        difference in what the slider is doing, and it is invisible unless
-        something says so.
+        dots drawn larger as it shrinks - and outside them there is nothing to
+        retune towards, so it is simply magnified. That is a real difference in
+        what the slider is doing, and invisible unless something says so.
         """
+        return (
+            f"Below {orbs.TUNED_MIN} px: the smallest drawing, shrunk",
+            "Pick one for each state above",
+            f"Above {orbs.TUNED_MAX} px: the largest drawing, magnified",
+        )
+
+    def _show_hint(self):
+        below, inside, above = self._hints()
         size = self.settings["size"]
-        if size < orbs.TUNED_MIN:
-            self.hint.setText(f"Below {orbs.TUNED_MIN} px: the smallest "
-                              f"drawing, shrunk")
-        elif size > orbs.TUNED_MAX:
-            self.hint.setText(f"Above {orbs.TUNED_MAX} px: the largest "
-                              f"drawing, magnified")
-        else:
-            self.hint.setText("Pick one for each state above")
+        self.hint.setText(below if size < orbs.TUNED_MIN
+                          else above if size > orbs.TUNED_MAX
+                          else inside)
 
     def _speed_changed(self, value):
         if self._loading:
