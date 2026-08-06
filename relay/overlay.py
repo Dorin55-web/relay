@@ -1,14 +1,17 @@
-"""A small always-on-top indicator: a sash of dots turning over a dark ball.
+"""A small always-on-top indicator, wearing a different look in each state.
 
-The orb runs its undulation the whole time it is on screen. Speaking deepens
-it - the sash twists harder and lifts - and the twist eases back down when you
-stop, so the difference between resting and listening is a change of intensity
-rather than a change of shape.
+Resting, listening and working each get their own drawing from `orbs` and
+their own speed, chosen in the picker window and kept in config.json. Changing
+state cross-fades from one to the next rather than cutting: the two drawings
+share no geometry at all, so a cut reads as the orb being replaced.
 
-Two dot drawings live here for two different jobs. The orb is the sash, at 64
-pixels, moving. The taskbar and window icon is the still globe in `sphere`,
-which has to stay legible down to sixteen pixels; the sash frozen at that size
-is five hundred sub-pixel dots and no shape at all.
+Speaking hurries whichever look is on. That is one handle rather than nine
+per-look ones, and it is the only one all of them have in common - a lattice
+has rings to ripple, a constellation has none.
+
+The taskbar and window icon is the still globe in `sphere` instead - a
+different drawing for a different job. An icon never moves and has to survive
+sixteen pixels, where these looks are hundreds of sub-pixel dots and no shape.
 
 Built on PySide6 rather than tkinter for real alpha. The window is padded by
 SHADOW_PAD on every side so the shadow has somewhere to fall; all drawing is
@@ -18,23 +21,22 @@ rather than the padded window.
 
 import ctypes
 import json
-import math
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import (QAction, QColor, QIcon, QLinearGradient, QPainter,
-                           QPainterPath, QPen, QPixmap, QRadialGradient)
+                           QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
-from . import ribbon, sphere
+from . import orbs, sphere
+from .config import DEFAULTS, normalise_orb
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 POSITION_FILE = PROJECT_ROOT / ".orb_position.json"
 ICON_PATH = PROJECT_ROOT / "assets" / "relay.ico"
 
-ORB_SIZE = 64            # the sash was tuned at this size; smaller and its
-                         # dots fall under a pixel and blur into a smudge
+DEFAULT_ORB_SIZE = DEFAULTS["orb"]["size"]
 SHADOW_PAD = 12          # room around the artwork for the drop shadow
 GLOBE_FILL = 0.82        # how much of the circle the icon's dots reach into
 MIN_DOT_PIXELS = 0.55    # floor, so a 16px icon still draws dots not haze
@@ -44,54 +46,59 @@ ICON_INSET = 0.03
 ICON_RADIUS = 0.23
 ICON_LIFT = 2.4          # the icon is drawn brighter than the orb sits at
 
-FRAME_MS = 33            # 30fps. The undulation is slow enough to read at
+FRAME_MS = 33            # 30fps. These looks move slowly enough to read at
                          # this rate, and the orb animates all day: sixty
                          # would double the cost of that for no visible gain.
+CROSSFADE_FRAMES = 9     # about a third of a second, both looks drawn at once
 
-# What speaking does to the sash: it twists harder. Brightening was tried
-# alongside and dropped - the tuning already draws the near dots at full alpha,
-# so a lift only reaches the far ones and moved the ink on screen by five
-# percent, which is not a signal.
-VOICE_WOBBLE = 0.9       # extra undulation at full level
+# How much louder speech hurries the look along, at full level.
+VOICE_URGENCY = 0.6
 
 # The level is smoothed asymmetrically: quick to follow a syllable starting,
-# slow to let go, so the sash rides speech instead of flickering with it.
+# slow to let go, so the orb rides speech instead of flickering with it.
 LEVEL_ATTACK = 0.35
 LEVEL_RELEASE = 0.06
-LEVEL_CURVE = 0.7        # quiet speech still moves the sash visibly
-
-# Nothing to listen to while the transcription runs, so it gets a pulse of its
-# own - otherwise working looks exactly like waiting.
-WORK_PULSE_RATE = 2.2
-WORK_PULSE_LOW = 0.30
-WORK_PULSE_SPAN = 0.35
+LEVEL_CURVE = 0.7        # quiet speech still moves the orb visibly
 
 
-TILE_TOP_RGB = (32, 36, 46)      # the sash turns over this gradient
+TILE_TOP_RGB = (32, 36, 46)      # the look is drawn over this gradient
 TILE_BOTTOM_RGB = (13, 15, 20)
 TILE_ALPHA = 232
 
-# One colour, in every state. The sash deepening is the signal for listening,
-# so the orb never needs to change hue to say anything.
+# One colour, in every state. The look changing is the signal, so the orb
+# never needs a hue to say anything.
 ACCENT = QColor("#e8ebf0")
 
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def paint_ribbon(painter, cx, cy, diameter, t, wobble=1.0):
-    """The sash, centred on cx/cy. Far dots first, so near ones land on top.
+def paint_look(painter, left, top, size, look, clock, opacity=1.0):
+    """One look, drawn into a size-by-size box at left/top.
 
-    The ink the geometry hands back is 0 for darkest, which is the convention
-    it was drawn in on paper; the orb is a dark tile, so it comes out mirrored.
+    Lines go down before dots, so the nodes of the constellation sit on their
+    own wires; the dots then go far to near, which is the whole of the depth
+    sorting these need. `opacity` scales everything, which is what makes a
+    cross-fade possible without either drawing knowing about the other.
     """
+    dots, lines = orbs.frame(look, size, clock)
+
+    for x1, y1, x2, y2, ink, alpha, width in lines:
+        painter.setPen(QPen(_ink(ink, alpha * opacity), width))
+        painter.drawLine(QPointF(left + x1, top + y1),
+                         QPointF(left + x2, top + y2))
+
     painter.setPen(Qt.NoPen)
-    for x, y, _depth, r, ink, alpha in sorted(
-            ribbon.dots(t, diameter, wobble), key=lambda d: d[2]):
-        grey = round((1.0 - min(1.0, max(0.0, ink))) * 255)
-        colour = QColor(grey, grey, grey)
-        colour.setAlphaF(min(1.0, alpha))
-        painter.setBrush(colour)
-        painter.drawEllipse(QPointF(cx + x, cy + y), r, r)
+    for x, y, _z, r, ink, alpha in sorted(dots, key=lambda d: d[2]):
+        painter.setBrush(_ink(ink, alpha * opacity))
+        painter.drawEllipse(QPointF(left + x, top + y), r, r)
+
+
+def _ink(ink, alpha):
+    """The drawings are inked for paper, 0 darkest. This is a dark tile."""
+    grey = round((1.0 - min(1.0, max(0.0, ink))) * 255)
+    colour = QColor(grey, grey, grey)
+    colour.setAlphaF(min(1.0, max(0.0, alpha)))
+    return colour
 
 
 def paint_globe(painter, cx, cy, diameter, lift=1.0):
@@ -190,7 +197,7 @@ def _make_non_activating(widget):
 class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
                  prompts_getter=None, on_prompt=None, on_edit_prompts=None,
-                 on_compose=None):
+                 on_compose=None, on_pick_look=None, orb_settings=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
         # Qt quits once the last primary window closes, and a Qt.Tool window -
         # which the dot is - does not count as one. Without this, closing the
@@ -203,6 +210,7 @@ class Orb(QWidget):
         self.on_prompt = on_prompt
         self.on_edit_prompts = on_edit_prompts
         self.on_compose = on_compose
+        self.on_pick_look = on_pick_look
         self.menu = None
         self._hotkey_label = tooltip
         self._prompts_getter = prompts_getter or (lambda: [])
@@ -212,10 +220,17 @@ class Orb(QWidget):
         self._frame = 0
         self._press_global = None
         self._press_origin = None
-        # The sash's own clock, in the units its geometry is written in, and
-        # the smoothed level driving how hard it twists.
-        self._clock = 0.0
         self._level = 0.0
+
+        self.orb_settings = normalise_orb(orb_settings)
+        self.orb_size = self.orb_settings["size"]
+        self._look = self._look_for("idle")
+        # Each look's clock is its own, and starts at zero when it comes on:
+        # they are not on a common timeline, and there is nothing to be gained
+        # by carrying one look's phase into another's.
+        self._clock = 0.0
+        # What is fading out behind the current look, if anything.
+        self._leaving = None
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -300,6 +315,13 @@ class Orb(QWidget):
             write_act.triggered.connect(self._fire_compose)
             self.menu.addAction(write_act)
 
+        if self.on_pick_look is not None:
+            look_act = QAction("Change how it looks...", self)
+            look_act.setToolTip("A different drawing for resting, "
+                                "listening and working")
+            look_act.triggered.connect(self._fire_pick_look)
+            self.menu.addAction(look_act)
+
         self.menu.addSeparator()
         quit_act = QAction("Quit", self)
         quit_act.triggered.connect(self.quit)
@@ -313,7 +335,8 @@ class Orb(QWidget):
             return self._on_screen(int(data["x"]), int(data["y"]))
         except Exception:
             screen = self.app.primaryScreen().availableGeometry()
-            return screen.right() - ORB_SIZE - 40, screen.bottom() - ORB_SIZE - 60
+            return (screen.right() - self.orb_size - 40,
+                    screen.bottom() - self.orb_size - 60)
 
     def _on_screen(self, x, y):
         """Pull a saved position back inside the display it was saved on.
@@ -325,8 +348,8 @@ class Orb(QWidget):
         screen = self.app.screenAt(QPoint(x, y))
         area = (screen or self.app.primaryScreen()).availableGeometry()
         return (
-            max(area.left(), min(x, area.right() - ORB_SIZE)),
-            max(area.top(), min(y, area.bottom() - ORB_SIZE)),
+            max(area.left(), min(x, area.right() - self.orb_size)),
+            max(area.top(), min(y, area.bottom() - self.orb_size)),
         )
 
     def _save_position(self):
@@ -347,12 +370,13 @@ class Orb(QWidget):
         self.setGeometry(
             int(self.anchor_x) - SHADOW_PAD,
             int(self.anchor_y) - SHADOW_PAD,
-            ORB_SIZE + 2 * SHADOW_PAD,
-            ORB_SIZE + 2 * SHADOW_PAD,
+            self.orb_size + 2 * SHADOW_PAD,
+            self.orb_size + 2 * SHADOW_PAD,
         )
 
     def _centre(self):
-        return SHADOW_PAD + ORB_SIZE / 2, SHADOW_PAD + ORB_SIZE / 2
+        half = SHADOW_PAD + self.orb_size / 2
+        return half, half
 
     # --- input ------------------------------------------------------------
 
@@ -405,6 +429,14 @@ class Orb(QWidget):
         except Exception as exc:
             print(f"[orb] could not open the write window: {exc}")
 
+    def _fire_pick_look(self):
+        if self.on_pick_look is None:
+            return
+        try:
+            self.on_pick_look()
+        except Exception as exc:
+            print(f"[orb] could not open the look picker: {exc}")
+
     def _fire_edit_prompts(self):
         if self.on_edit_prompts is None:
             return
@@ -417,38 +449,91 @@ class Orb(QWidget):
 
     def set_state(self, state):
         # Only touches plain attributes; the timer repaints on the GUI thread.
+        if state == self.state:
+            return
         self.state = state
+        self._change_look(self._look_for(state))
 
     def flash(self, kind):
         """Kept so callers need not care, but deliberately does nothing.
 
-        Success and failure used to tint the dot green or red. The sash
-        settling already says the dictation finished, and the log says how it
-        went, so a colour change here only added noise.
+        Success and failure used to tint the dot green or red. The look
+        changing back already says the dictation finished, and the log says how
+        it went, so a colour change here only added noise.
         """
+
+    # --- looks ------------------------------------------------------------
+
+    def _look_for(self, state):
+        return self.orb_settings[state]["look"]
+
+    def _speed_for(self, state):
+        return self.orb_settings[state]["speed"]
+
+    def _change_look(self, look):
+        """Start showing a different drawing, fading the old one out under it."""
+        if look == self._look:
+            return
+        self._leaving = (self._look, self._clock, CROSSFADE_FRAMES)
+        self._look = look
+        self._clock = 0.0
+
+    def apply_settings(self, settings):
+        """Take a new set of looks, live - the picker calls this as you click.
+
+        The orb keeps running while the picker is open, so this has to cope
+        with the size changing underneath it: the window is resized around the
+        same anchor, and the position is left where the user put it.
+        """
+        self.orb_settings = normalise_orb(settings)
+        if self.orb_settings["size"] != self.orb_size:
+            self.orb_size = self.orb_settings["size"]
+            self.anchor_x, self.anchor_y = self._on_screen(
+                self.anchor_x, self.anchor_y)
+            self._apply_geometry()
+            self._save_position()
+        self._change_look(self._look_for(self.state))
+        self.update()
 
     # --- animation --------------------------------------------------------
 
     def _tick(self):
         self._frame += 1
-        self._clock += ribbon.SPEED * FRAME_MS / 1000.0
         target = self._target_level()
         # Fast towards a louder level, slow away from it. Symmetric smoothing
         # either lags the start of a word or chatters through the gaps between
         # them; there is no single rate that does both.
         glide = LEVEL_ATTACK if target > self._level else LEVEL_RELEASE
         self._level += (target - self._level) * glide
+
+        seconds = FRAME_MS / 1000.0
+        self._clock += self._rate(self._look) * seconds
+        if self._leaving is not None:
+            look, clock, left = self._leaving
+            left -= 1
+            self._leaving = (
+                (look, clock + self._rate(look) * seconds, left)
+                if left > 0 else None
+            )
         self.update()
 
+    def _rate(self, look):
+        """How fast a look's clock runs: its own tuning, the dial, the voice.
+
+        Hurrying it is the one handle every look has. Nine drawings with
+        nothing in common geometrically - a lattice has rings to ripple, a
+        constellation has none - and a per-look response would be nine
+        separate inventions on top of a tuning that was already finished.
+        """
+        return (orbs.speed_of(look, self.orb_size)
+                * self._speed_for(self.state)
+                * (1.0 + VOICE_URGENCY * self._level))
+
     def _target_level(self):
-        """How hard the sash should be twisting, before smoothing."""
+        """How loud it is, before smoothing. Only listening has an answer."""
         if self.state == "recording":
             level = max(0.0, min(1.0, self.level_getter()))
             return level ** LEVEL_CURVE
-        if self.state == "processing":
-            return WORK_PULSE_LOW + WORK_PULSE_SPAN * (
-                0.5 + 0.5 * math.sin(self._clock * WORK_PULSE_RATE)
-            )
         return 0.0
 
     # --- painting ---------------------------------------------------------
@@ -457,10 +542,19 @@ class Orb(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         cx, cy = self._centre()
+        left = cx - self.orb_size / 2
+        top = cy - self.orb_size / 2
 
         self._paint_tile(painter, cx, cy)
-        paint_ribbon(painter, cx, cy, ORB_SIZE, self._clock,
-                     1.0 + VOICE_WOBBLE * self._level)
+        if self._leaving is not None:
+            look, clock, remaining = self._leaving
+            fading = remaining / CROSSFADE_FRAMES
+            paint_look(painter, left, top, self.orb_size, look, clock, fading)
+            paint_look(painter, left, top, self.orb_size, self._look,
+                       self._clock, 1.0 - fading)
+        else:
+            paint_look(painter, left, top, self.orb_size, self._look,
+                       self._clock)
         painter.end()
 
     def _paint_tile(self, painter, cx, cy):
@@ -470,7 +564,7 @@ class Orb(QWidget):
         colour it already knows. A desktop overlay lands on anything, and
         light-grey dots on a white window are not there at all.
         """
-        radius = ORB_SIZE / 2
+        radius = self.orb_size / 2
 
         # Cheap drop shadow: a few offset discs at low alpha. Qt's graphics
         # effect would need a second render pass for the same look.

@@ -82,35 +82,64 @@ small dot floating above your other windows.
 
 1. Click into the text box you want to dictate into, once.
 2. Press **F9**, or click the dot.
-3. Speak. The orb's sash twists harder as it hears you.
+3. Speak. The orb changes to its listening look and hurries as it hears you.
 4. Press **F9** again to stop.
 
 Text appears as you speak, phrase by phrase. Nothing is submitted for you —
 press Enter yourself when you are happy with it.
 
-**The orb** is a sash of dots turning over a dark ball, and can be dragged
-anywhere; its position is remembered.
+---
 
-It undulates the whole time it is on screen. Speaking deepens it — the strands
-are pulled about twice as far off their band — and the twist eases back down
-when you stop, quickly on the way up so it catches the start of a word, slowly
-on the way down so it rides speech instead of flickering through the gaps.
-Brightening it was tried alongside and dropped: the drawing already has its
-near dots at full opacity, so a lift only reached the far ones and moved five
-percent of the ink.
+## The orb
 
-It runs at thirty frames a second rather than sixty. The undulation is slow
+Drag it anywhere; its position is remembered. It animates the whole time it is
+on screen, and it wears **a different drawing in each of its three states** —
+resting, listening, working. Right-click it and pick **Change how it looks…**
+
+There are nine to choose from, each animating in its own tile so the choice is
+something you look at rather than read:
+
+| | | |
+|---|---|---|
+| **working** — particles running their orbits | **searching** — a globe under a sweeping scan | **solving** — bands twisting and clicking back |
+| **listening** — a waveform rolling through the rings | **connecting** — a constellation wiring itself up | **weaving** — three strands plaiting over a ball |
+| **composing** — a sash undulating on its band | **breathing** — a ring swelling and pinching | **shaping** — an outline cycling through shapes |
+
+Each state also carries **its own speed**, from 0.1× to 3×, on top of whatever
+that look was tuned at. Out of the box: *breathing* while it waits, *listening*
+while you talk, *working* while it transcribes.
+
+Three **sizes**: 20px, 40px and 64px. The two ends are the original's own
+tunings — separate designs rather than one scaled, because a mark for a chat
+avatar and a mark for a line of text want different densities. The middle one
+is Relay's, blended between them.
+
+Changing state cross-fades over about a third of a second. The two drawings
+share no geometry at all, so cutting between them reads as the orb being
+replaced rather than changing.
+
+**Speaking hurries whichever look is on**, by up to 60%. That is one handle
+rather than nine, and it is the only one they all have in common — a lattice
+has rings to ripple, a constellation has none. The response is quick on the way
+up so it catches the start of a word and slow on the way down so it rides
+speech instead of flickering through the gaps.
+
+Everything is written to `config.json` when you press Save, and nothing before
+then: closing the picker puts back what was there, so trying all nine costs
+nothing.
+
+It runs at thirty frames a second rather than sixty. These looks move slowly
 enough to read at that rate, and something that animates all day should not
-cost twice what it needs to; a frame is about 4 ms, so the orb sits at roughly
-a tenth of one core.
+cost twice what it needs to. The dearest of them is about 4.5 ms a frame, so
+the orb sits at roughly an eighth of one core.
 
 The taskbar icon is a **still globe** of dots instead — a different drawing for
 a different job. An icon never moves and has to survive sixteen pixels, where
-the sash is five hundred sub-pixel dots and no shape at all.
+these looks are hundreds of sub-pixel dots and no shape at all.
 
-The sash is ported from [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs)
-(MIT, see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) — its *composing*
-state at 1.1× speed, redrawn in QPainter so Relay keeps its dependencies.
+All nine are ported from [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs)
+(MIT, see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)), redrawn in
+QPainter so Relay keeps its dependencies.
 
 ---
 
@@ -282,7 +311,8 @@ relay/
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating orb (PySide6)
-├── ribbon.py            the sash of dots it draws
+├── orbs/                the nine looks it can wear
+├── look_picker.py       the window that assigns one to each state
 ├── sphere.py            the still globe the icon is drawn from
 ├── feedback.py          console status
 ├── logsetup.py          redirects output to the log when there is no console

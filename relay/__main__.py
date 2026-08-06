@@ -433,6 +433,26 @@ class VoicePrompt:
             self.feedback.error(f"could not open the prompt editor: {exc}")
             prompts_mod.open_for_editing()
 
+    def pick_look(self):
+        """Open the window that chooses what the orb draws in each state."""
+        from .look_picker import open_picker
+
+        try:
+            with self._hooks_down("the look picker"):
+                open_picker(self.config["orb"], self._orb_settings_changed)
+        except Exception as exc:
+            self.feedback.error(f"could not open the look picker: {exc}")
+
+    def _orb_settings_changed(self, settings):
+        """Live, as the picker is clicked - and again when it saves.
+
+        The config in memory is updated too, so opening the picker a second
+        time starts from what is on screen rather than from the file.
+        """
+        self.config["orb"] = settings
+        if self.orb is not None:
+            self.orb.apply_settings(settings)
+
     # --- startup ---------------------------------------------------------
 
     def _load_engine(self):
@@ -529,6 +549,8 @@ class VoicePrompt:
             on_prompt=self.insert_prompt,
             on_edit_prompts=self.edit_prompts,
             on_compose=self.open_compose,
+            on_pick_look=self.pick_look,
+            orb_settings=self.config["orb"],
         )
         self.orb.level_getter = lambda: self.recorder.level
         self.orb.set_state(PROCESSING)  # spinner until the model is loaded

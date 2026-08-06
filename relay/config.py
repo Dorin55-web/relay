@@ -54,6 +54,25 @@ DEFAULTS = {
     # --- feedback ---
     "beep_feedback": True,
     "print_transcript": True,
+    # --- the orb ---
+    # One look per state, each with its own speed. Edited from the orb's
+    # right-click menu rather than by hand, but readable and hand-editable all
+    # the same. See relay/orbs for what the names draw.
+    "orb": {
+        "size": 64,
+        "idle": {"look": "breathing", "speed": 1.0},
+        "recording": {"look": "listening", "speed": 1.3},
+        "processing": {"look": "working", "speed": 1.0},
+    },
+}
+
+# The three things the orb can be doing, in the order the picker lists them,
+# with the words a person would use for them.
+ORB_SLOTS = ("idle", "recording", "processing")
+SLOT_LABELS = {
+    "idle": "Resting",
+    "recording": "Listening",
+    "processing": "Working",
 }
 
 
@@ -83,7 +102,59 @@ def load_config(path=None):
             print(f"[config] ignoring unknown key(s): {', '.join(sorted(unknown))}")
         cfg.update({k: v for k, v in user_values.items() if k in DEFAULTS})
 
+    cfg["orb"] = normalise_orb(cfg.get("orb"))
     return cfg
+
+
+def normalise_orb(settings):
+    """Fill in and sanity-check the orb section.
+
+    Every other setting is a single value, so layering the user's file over the
+    defaults is enough. This one is a nested dict, and a shallow update
+    replaces the whole thing - a file that names a look for one state would
+    otherwise leave the other two with nothing at all. Each slot is merged on
+    its own, and anything that is not a look Relay can draw falls back rather
+    than crashing the orb at startup.
+    """
+    from . import orbs
+
+    base = DEFAULTS["orb"]
+    settings = settings if isinstance(settings, dict) else {}
+
+    out = {"size": orbs.nearest_size(settings.get("size", base["size"]))}
+    for slot in ORB_SLOTS:
+        chosen = settings.get(slot)
+        chosen = chosen if isinstance(chosen, dict) else {}
+        look = chosen.get("look", base[slot]["look"])
+        if not orbs.is_look(look):
+            print(f"[config] no orb look called {look!r}; "
+                  f"using {base[slot]['look']}")
+            look = base[slot]["look"]
+        try:
+            speed = orbs.clamp_speed(chosen.get("speed", base[slot]["speed"]))
+        except (TypeError, ValueError):
+            speed = base[slot]["speed"]
+        out[slot] = {"look": look, "speed": speed}
+    return out
+
+
+def save_orb(settings, path=None):
+    """Write the orb section back, leaving the rest of the file alone.
+
+    Rewriting the whole config from the loaded values would bake every default
+    into the file as though the user had chosen it, and lose any comment-like
+    ordering they had. Only this one key is touched.
+    """
+    config_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raw = {}
+    except (json.JSONDecodeError, OSError):
+        raw = {}
+    raw["orb"] = normalise_orb(settings)
+    config_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return raw["orb"]
 
 
 def write_default_config(path=None):

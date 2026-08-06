@@ -2,13 +2,16 @@
 
 ## thinking-orbs
 
-`relay/ribbon.py` is a port of the `ribbon` mode from **thinking-orbs**
+`relay/orbs/` is a port of all nine modes from **thinking-orbs**
 (https://github.com/Jakubantalik/thinking-orbs), redrawn in QPainter for
 PySide6. The geometry, the shading and the tuning constants are that project's
-work; Relay uses its 64px *composing* preset, at 1.1x its clock.
+work, including both of its shipped size presets.
+
+Relay adds only its own middle size, blended between the two, and a speed dial
+over the tuned clock rates.
 
 None of the original code ships here — it is React and 2D canvas, and Relay
-draws with Qt — but the drawing is theirs, so their licence travels with it.
+draws with Qt — but the drawings are theirs, so their licence travels with them.
 
 ```
 MIT License
