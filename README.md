@@ -282,6 +282,24 @@ when you want to watch the output live.
 
 ---
 
+## Tests
+
+```bash
+python tests/run.py
+```
+
+Eight suites, each in its own process, about a minute for the lot. They
+build real windows and ask Windows itself what it would do, because most of
+what they check cannot be checked any other way — whether a click lands on a
+transparent pixel is a question for the window manager, not for a mock.
+
+Nothing they do touches your `prompts.json` or the orb's saved position; both
+are redirected to a throwaway directory first. `tests/probes/` holds nine more
+scripts that report numbers rather than passing or failing, for when something
+needs investigating. See [tests/README.md](tests/README.md).
+
+---
+
 ## Troubleshooting
 
 Because there is no console, everything is written to **`relay.log`** in
@@ -330,6 +348,7 @@ It is downloading the 1.5 GB model. This happens once.
 
 ```
 assets/relay.ico         the icon the shortcuts point at, 16px to 256px
+tests/                   eight suites and a runner; probes/ under it
 relay/
 ├── __main__.py          entry point, state machine, worker threads
 ├── cuda_setup.py        registers the pip-installed CUDA DLLs (must run first)

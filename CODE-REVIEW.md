@@ -3,9 +3,9 @@
 A pass over all 36 tracked files (5,806 lines of Python), ordered by what is
 worth doing first.
 
-> **Findings 2, 4, 6, 7 and 10 have been applied.** They are kept below with
-> what was found and why, since the reasoning is the part worth keeping; each
-> is marked **Done**. Findings 1, 3, 5, 8 and 9 are still open.
+> **Findings 1, 2, 4, 6, 7 and 10 have been applied.** They are kept below
+> with what was found and why, since the reasoning is the part worth
+> keeping; each is marked **Done**. Findings 3, 5, 8 and 9 are still open.
 
 Every claim was checked mechanically — module-level names resolved with an AST
 walk over the whole package, imports cross-referenced against actual use,
@@ -20,7 +20,7 @@ the check itself.
 
 | | Finding | Size |
 |---|---|---|
-| 1 | **The tests are not in the repo.** 14 suites live in a temp directory | ~1,400 lines at risk |
+| 1 ✅ | **The tests are not in the repo.** 14 suites live in a temp directory | ~1,400 lines at risk |
 | 2 ✅ | `Orb.flash()` does nothing, and is called from 9 places | ~27 lines |
 | 3 | Three windows carry three copies of the same stylesheet and palette | ~90 lines |
 | 4 ✅ | Debug logging left in the resize path, printing on every drag | 2 lines |
@@ -33,7 +33,7 @@ the check itself.
 
 ---
 
-## 1. The tests are not in the repo — the biggest problem here
+## 1. The tests are not in the repo — **Done**
 
 There are **14 test suites** and **none of them are tracked**:
 
@@ -65,6 +65,22 @@ behind it.
 
 **Suggested:** a `tests/` directory in the repo, paths made relative, and a
 one-line runner. This is the only item on the list that gets worse with time.
+
+**Applied.** `tests/` now holds the eight assertion suites, a `run.py` that
+runs each in its own process, and `context.py` that replaces the absolute path
+every one of them carried. The six measurement scripts and three probes moved
+to `tests/probes/` and lost their `test_` prefix, because a runner cannot tell
+whether a measurement went well and calling them tests implied it could.
+
+Putting them under version control turned up something the review had not:
+**running the suite moved the real orb 31 pixels.** `test_looks` grows the orb
+to 120 px, which pushes its saved anchor off the edge of the screen, and the
+clamp that pulls it back writes the new position out. Measured before and
+after, not reasoned about. `context.isolate_state()` now points the orb's
+position file and `prompts.json` at a throwaway directory, and every suite
+calls it. Two suites were doing their own backup-and-restore of the real
+`prompts.json`; that is gone, since a crash halfway through would have left
+the user's prompts as the test wrote them.
 
 ---
 
@@ -336,5 +352,9 @@ Re-ran the same sweeps afterwards: no unused imports anywhere in the package,
 and nothing defined-and-unreferenced except `_Tee.isatty()`, which is the known
 false positive. All 8 test suites pass and the app runs.
 
-Findings 1, 3, 5, 8 and 9 remain open. **Finding 1 is the one that matters** —
-it is still the only item that gets worse with time.
+Then finding 1: the tests moved into `tests/`, with the isolation bug that
+only showed up once they were run as a suite rather than one at a time.
+
+Findings 3, 5, 8 and 9 remain open. All four are tidying rather than risk:
+duplicated window chrome, four near-identical `_fire_*` methods, two identical
+singletons, and the decision about whether the watchdog stays.
