@@ -22,10 +22,10 @@ the window manager, not for a mock.
 
 | Suite | What it holds down | ~time |
 |---|---|---|
-| `test_looks.py` | The nine orb drawings at eight sizes: no dot outside the box or under the radius floor, every look moves, the size retunes across the tuned span and magnifies outside it, the config round-trips, and every look is opaque enough to click | 2 s |
+| `test_looks.py` | The nine orb drawings at eight sizes: no dot outside the box or under the radius floor, every look moves, the size retunes across the tuned span and magnifies outside it, the config round-trips, every look is opaque enough to click, and a change of look starts exactly at the old one and ends exactly at the new | 3 s |
 | `test_tooltip.py` | The prompt behind a menu label waits 3.5 s and restarts on any movement, driven through a real event loop | 3 s |
 | `test_compose.py` | The typed-text path: Romanian in, English out, stale results dropped, the Send button naming the right target | 6 s |
-| `test_editor.py` | The prompt editor driven by its own buttons — add, delete, reorder, save — plus recovery from a corrupt `prompts.json` and no temp file left behind | 33 s |
+| `test_editor.py` | The prompt editor driven by its own buttons — add, delete, reorder, save — plus recovery from a corrupt `prompts.json` and no temp file left behind | 2 s |
 | `test_survives_editor.py` | The orb outliving the editor. `Qt.Tool` windows are not primary windows, so without `quitOnLastWindowClosed(False)` closing the editor takes the app down | 2 s |
 | `test_resize_guard.py` | Which border pixels start a resize and which must not, walked one pixel at a time | 5 s |
 | `test_watchdog.py` | The stall detector catching a real stall and naming the code that caused it | 10 s |
@@ -34,6 +34,19 @@ the window manager, not for a mock.
 
 `test_compose.py` needs the Marian translation model. The first run downloads
 it; later ones are fast. `test_bluetooth.py` opens real audio devices.
+
+## Nothing here waits for a human
+
+`context.silence_dialogs(module)` replaces `QMessageBox` in the module under
+test with one that records the call and answers it. A modal runs its own event
+loop and does not return until dismissed, so a suite that raises one stops
+dead — and reads as a slow test rather than a stuck one.
+
+`test_editor` triggers exactly that on purpose, checking that a blank prompt is
+refused. Its time wandered between 6 s, 33 s, 205 s and finally a 240 s timeout
+depending on whether a stray keypress happened to land on the dialog nobody
+knew was open. It takes 2 s now, every time, and it can assert that the warning
+appeared rather than only that the save returned `False`.
 
 ## Nothing here touches your files
 

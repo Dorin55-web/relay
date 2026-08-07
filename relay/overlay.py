@@ -1,9 +1,13 @@
 """A small always-on-top indicator, wearing a different look in each state.
 
 Resting, listening and working each get their own drawing from `orbs` and
-their own speed, chosen in the picker window and kept in config.json. Changing
-state cross-fades from one to the next rather than cutting: the two drawings
-share no geometry at all, so a cut reads as the orb being replaced.
+their own speed, chosen in the picker window and kept in config.json.
+
+Changing state does not cut, and no longer fades either. The two drawings
+share no geometry - a lattice, a constellation and an outline have nothing in
+common but being made of dots - but dots can go somewhere, so each one of the
+old mark is paired with a place in the new one and travels to it. See
+orbs/blend.
 
 Speaking hurries whichever look is on. That is one handle rather than nine
 per-look ones, and it is the only one all of them have in common - a lattice
@@ -71,7 +75,11 @@ ICON_LIFT = 2.4          # the icon is drawn brighter than the orb sits at
 FRAME_MS = 33            # 30fps. These looks move slowly enough to read at
                          # this rate, and the orb animates all day: sixty
                          # would double the cost of that for no visible gain.
-CROSSFADE_FRAMES = 9     # about a third of a second, both looks drawn at once
+# How long a change of look takes, in frames. Longer than the cross-fade it
+# replaced: the dots are travelling now, and a journey that fast reads as a
+# jump. Both looks are computed for each of these frames, so this is also the
+# only time the orb costs double.
+CHANGE_FRAMES = 13       # a little over four hundred milliseconds
 
 # How long the pointer has to sit still on a menu item before the whole prompt
 # behind its label appears. Long on purpose: this is for when you have stopped
@@ -101,14 +109,29 @@ ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def paint_look(painter, left, top, size, look, clock, opacity=1.0):
-    """One look, drawn into a size-by-size box at left/top.
+    """One look, drawn into a size-by-size box at left/top."""
+    _paint(painter, left, top, orbs.frame(look, size, clock), opacity)
 
-    Lines go down before dots, so the nodes of the constellation sit on their
-    own wires; the dots then go far to near, which is the whole of the depth
-    sorting these need. `opacity` scales everything, which is what makes a
-    cross-fade possible without either drawing knowing about the other.
+
+def paint_change(painter, left, top, size, was, now, f):
+    """Part way from one look to another, with the dots travelling.
+
+    `was` and `now` are each (look, clock). See orbs/blend: every dot of the
+    old mark is paired with a place in the new one and moves to it, rather
+    than the two being laid over each other at opposite opacities.
     """
-    dots, lines = orbs.frame(look, size, clock)
+    _paint(painter, left, top, orbs.blend(
+        size,
+        orbs.frame(was[0], size, was[1]),
+        orbs.frame(now[0], size, now[1]),
+        f,
+    ))
+
+
+def _paint(painter, left, top, frame, opacity=1.0):
+    """Lines down first, so the constellation's nodes sit on their own wires;
+    then the dots far to near, which is all the depth sorting these need."""
+    dots, lines = frame
 
     for x1, y1, x2, y2, ink, alpha, width in lines:
         painter.setPen(QPen(_ink(ink, alpha * opacity), width))
@@ -552,7 +575,7 @@ class Orb(QWidget):
         """Start showing a different drawing, fading the old one out under it."""
         if look == self._look:
             return
-        self._leaving = (self._look, self._clock, CROSSFADE_FRAMES)
+        self._leaving = (self._look, self._clock, CHANGE_FRAMES)
         self._look = look
         self._clock = 0.0
 
@@ -633,10 +656,9 @@ class Orb(QWidget):
         self._paint_hit_area(painter, cx, cy)
         if self._leaving is not None:
             look, clock, remaining = self._leaving
-            fading = remaining / CROSSFADE_FRAMES
-            paint_look(painter, left, top, self.orb_size, look, clock, fading)
-            paint_look(painter, left, top, self.orb_size, self._look,
-                       self._clock, 1.0 - fading)
+            paint_change(painter, left, top, self.orb_size,
+                         (look, clock), (self._look, self._clock),
+                         1.0 - remaining / CHANGE_FRAMES)
         else:
             paint_look(painter, left, top, self.orb_size, self._look,
                        self._clock)

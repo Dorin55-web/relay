@@ -23,7 +23,7 @@ from relay import config as config_mod  # noqa: E402
 from relay import overlay as overlay_mod  # noqa: E402
 from relay import orbs  # noqa: E402
 from relay.orbs.core import js_round  # noqa: E402
-from relay.overlay import (CROSSFADE_FRAMES, FRAME_MS, ICON_SIZES,  # noqa: E402
+from relay.overlay import (CHANGE_FRAMES, FRAME_MS, ICON_SIZES,  # noqa: E402
                            EDGE_PAD, VOICE_URGENCY, Orb, build_icon)
 
 fails = []
@@ -140,6 +140,72 @@ check("and its radius with it, bar the ones the floor had lifted",
       all(r == floor and br < floor * k for r, br in sizes_off),
       f"{len(sizes_off)} floored dots of {len(base)}")
 
+print("\n--- one look turns into another by moving ---")
+# The nine drawings share no geometry, so this used to be two pictures laid
+# over each other at opposite opacities. Every dot of the old mark is now
+# paired with a place in the new one and travels to it.
+WAS, NOW = "breathing", "listening"
+was = orbs.frame(WAS, 64, 1.4)
+now = orbs.frame(NOW, 64, 0.0)
+
+
+def positions(frame):
+    return sorted((round(d[0], 4), round(d[1], 4)) for d in frame[0])
+
+
+start = orbs.blend(64, was, now, 0.0)
+end = orbs.blend(64, was, now, 1.0)
+check("at nought it is the look it is leaving",
+      positions(start) == positions(was))
+check("at one it is the look it is arriving at",
+      positions(end) == positions(now))
+
+middle = orbs.blend(64, was, now, 0.5)
+check("and halfway it is neither",
+      positions(middle) != positions(was)
+      and positions(middle) != positions(now))
+check("never drawing more dots than the busier of the two",
+      len(middle[0]) <= max(len(was[0]), len(now[0])),
+      f"{len(middle[0])} against {len(was[0])} and {len(now[0])}")
+
+# Dots have to actually go somewhere. Pairing by angle rather than by the
+# order the drawings emit them keeps that from being a random scatter.
+travel = 0.0
+for a, b in zip(positions(start), positions(end)):
+    travel = max(travel, abs(a[0] - b[0]) + abs(a[1] - b[1]))
+check("and they cover real ground getting there", travel > 5,
+      f"{travel:.0f}px at the furthest")
+
+# The gather: pulled in at the midpoint, so the mark closes and opens again
+# instead of sliding along straight lines.
+def reach(frame):
+    return max(max(abs(d[0] - 32), abs(d[1] - 32)) for d in frame[0])
+
+
+check("it gathers inward on the way", reach(middle) < max(reach(was), reach(now)),
+      f"{reach(middle):.1f}px against {max(reach(was), reach(now)):.1f}px")
+
+for f in (0.0, 0.15, 0.35, 0.5, 0.65, 0.85, 1.0):
+    frame = orbs.blend(64, was, now, f)
+    inside = all(abs(d[0] - 32) <= 48 and abs(d[1] - 32) <= 48 for d in frame[0])
+    alphas = all(0.0 <= d[5] <= 1.0 for d in frame[0])
+    if not (inside and alphas):
+        check(f"blend at {f} stays in bounds", False,
+              f"inside={inside} alphas={alphas}")
+check("nothing leaves the box or runs out of range at any point",
+      not [f for f in fails if f.startswith("blend at")])
+
+# Only one look draws lines, and lines between dots that are each on their way
+# somewhere else would be a scribble - they fade with their own look instead.
+wired = orbs.blend(64, orbs.frame("connecting", 64, 1.0), now, 0.5)
+check("the constellation's wires fade rather than stretch",
+      wired[1] and all(0.0 < w[5] < 1.0 for w in wired[1]),
+      f"{len(wired[1])} lines")
+
+# An empty look would be a division by nothing in the pairing.
+check("a look with no dots does not break it",
+      orbs.blend(64, ([], []), now, 0.5)[0] == now[0])
+
 print("\n--- the size dial ---")
 check("clamps below", orbs.clamp_size(2) == orbs.MIN_SIZE)
 check("clamps above", orbs.clamp_size(999) == orbs.MAX_SIZE)
@@ -208,13 +274,13 @@ check("the window is the mark plus a hair of margin",
 
 orb.set_state("recording")
 check("a state change switches the look", orb._look == "listening")
-check("and the old one is still there, fading",
+check("and the old one is still on its way out",
       orb._leaving is not None and orb._leaving[0] == "breathing")
 orb.grab()
-check("both draw at once without complaint", True)
-for _ in range(CROSSFADE_FRAMES + 1):
+check("the change draws without complaint", True)
+for _ in range(CHANGE_FRAMES + 1):
     orb._tick()
-check("the fade finishes", orb._leaving is None)
+check("and it finishes", orb._leaving is None)
 
 print("\n--- the clock obeys the dial and the voice ---")
 orb.state = "recording"

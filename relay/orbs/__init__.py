@@ -14,6 +14,7 @@ box; ink is 0..1 with 0 darkest, and the painter mirrors it onto the tile.
 """
 
 from . import lattice, morph, paths, web
+from .blend import blend
 from .presets import (LOOK_BLURBS, LOOKS, MAX_SIZE, MAX_SPEED, MIN_SIZE,
                       MIN_SPEED, TUNED_MAX, TUNED_MIN, TUNED_SIZES,
                       clamp_size, clamp_speed, resolve, tuned_size)
@@ -83,6 +84,6 @@ def is_look(name):
 
 __all__ = [
     "LOOKS", "LOOK_BLURBS", "MAX_SIZE", "MAX_SPEED", "MIN_SIZE", "MIN_SPEED",
-    "TUNED_MAX", "TUNED_MIN", "TUNED_SIZES", "clamp_size", "clamp_speed",
-    "frame", "is_look", "resolve", "speed_of", "tuned_size",
+    "TUNED_MAX", "TUNED_MIN", "TUNED_SIZES", "blend", "clamp_size",
+    "clamp_speed", "frame", "is_look", "resolve", "speed_of", "tuned_size",
 ]

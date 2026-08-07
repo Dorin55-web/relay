@@ -141,9 +141,21 @@ Two things do *not* change when it is magnified: how fast it moves, and its
 proportions. The one exception is the smallest dots, which have a floor under
 them in real pixels and so do not scale past it.
 
-Changing state cross-fades over about a third of a second. The two drawings
-share no geometry at all, so cutting between them reads as the orb being
-replaced rather than changing.
+**Changing state does not fade — the dots travel.** The two drawings share no
+geometry at all, so this began as one laid over the other at opposite
+opacities, which reads as two pictures rather than one thing changing. They
+are all dots, though, and dots can go somewhere: each one of the old mark is
+paired with a place in the new one and moves to it over about four hundred
+milliseconds, gathering slightly inward on the way so the mark closes and
+opens again instead of sliding along straight lines.
+
+Pairing is by angle around the centre. Nearest-neighbour is the obvious choice
+and is unaffordable — 566 dots against 484 is a quarter of a million distance
+tests per frame — while pairing by the order the drawings happen to emit dots
+in sends them across the mark at random and reads as noise. Where the two
+counts differ, the dots with no partner fade on the spot, in the half of the
+transition nearest their own end. It costs nothing: a transition frame is
+about 4 ms, the same as an ordinary one.
 
 **Speaking hurries whichever look is on**, by up to 60%. That is one handle
 rather than nine, and it is the only one they all have in common — a lattice
@@ -372,7 +384,7 @@ relay/
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating orb (PySide6)
-├── orbs/                the nine looks it can wear
+├── orbs/                the nine looks it can wear, and the blend between them
 ├── look_picker.py       the window that assigns one to each state
 ├── sphere.py            the still globe the icon is drawn from
 ├── window.py            the frameless chrome both windows wear

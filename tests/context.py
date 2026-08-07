@@ -47,6 +47,46 @@ def isolate_state():
     return _isolated
 
 
+def silence_dialogs(module, answer_yes=True):
+    """Stop a modal message box from waiting for a click nobody can give.
+
+    QMessageBox.warning and friends run their own event loop and do not return
+    until dismissed. A suite that triggers one stops dead - and looks like a
+    slow test rather than a stuck one. test_editor exercises exactly that path
+    on purpose, and its timing wandered between 6s, 33s, 205s and a 240s
+    timeout depending on whether a stray keypress happened to land on the
+    dialog.
+
+    Replaces the name in the module under test, so the code being tested is
+    untouched, and returns the list the calls are recorded in - which lets a
+    test assert that the warning it expected actually happened, rather than
+    only that the function returned False.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    seen = []
+
+    class Recorded:
+        Yes, No = QMessageBox.Yes, QMessageBox.No
+        Ok, Cancel = QMessageBox.Ok, QMessageBox.Cancel
+
+        @staticmethod
+        def _note(kind, reply):
+            def dialog(_parent, title, text, *args, **kwargs):
+                seen.append((kind, title, text))
+                return reply
+            return dialog
+
+    Recorded.warning = Recorded._note("warning", QMessageBox.Ok)
+    Recorded.critical = Recorded._note("critical", QMessageBox.Ok)
+    Recorded.information = Recorded._note("information", QMessageBox.Ok)
+    Recorded.question = Recorded._note(
+        "question", QMessageBox.Yes if answer_yes else QMessageBox.No)
+
+    module.QMessageBox = Recorded
+    return seen
+
+
 class Report:
     """The pass/fail bookkeeping every suite here does the same way."""
 

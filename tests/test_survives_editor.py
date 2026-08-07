@@ -30,7 +30,13 @@ prompts_mod.ensure_file()
 app = QApplication.instance() or QApplication(sys.argv)
 
 from relay.overlay import Orb  # noqa: E402
+import relay.prompt_editor as editor_mod  # noqa: E402
 from relay.prompt_editor import PromptEditor  # noqa: E402
+
+# The save below is meant to succeed, so no dialog should appear at all. This
+# is here so that if one ever does, the suite fails instead of hanging on a
+# modal waiting for a click. See context.silence_dialogs.
+dialogs = context.silence_dialogs(editor_mod)
 
 quit_calls = []
 orb = Orb(
@@ -67,6 +73,7 @@ editor.text.setPlainText("test")
 saved = editor._save()          # saves, then closes itself
 app.processEvents()
 check("save succeeded", saved is True)
+check("and raised no dialog on the way", not dialogs, str(dialogs))
 check("editor closed itself", not editor.isVisible())
 check("dot still there after save", orb.isVisible())
 check("still no shutdown", not quit_calls)

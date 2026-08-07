@@ -25,7 +25,12 @@ tmp = prompts_mod.PROMPTS_PATH.parent
 
 app = QApplication.instance() or QApplication(sys.argv)
 
+import relay.prompt_editor as editor_mod  # noqa: E402
 from relay.prompt_editor import PromptEditor, open_editor  # noqa: E402
+
+# The editor refuses a bad save by putting up a modal warning, and a modal
+# waits for a click this file cannot give. See context.silence_dialogs.
+dialogs = context.silence_dialogs(editor_mod)
 
 print("\n--- save round-trip ---")
 ed = PromptEditor()
@@ -78,7 +83,15 @@ check("new entry selected", ed.index == 9)
 
 print("\n--- refuses bad input ---")
 ed.entries[9]["text"] = ""
+dialogs.clear()
 check("blank text blocks the save", ed._save() is False)
+# Refusing silently would be worse than saving nine prompts: the numbering is
+# the point of the menu, and losing one without a word is how you find out
+# later. It has to say so, not just return False.
+check("and says why", [d for d in dialogs if d[0] == "warning"],
+      str([d[1] for d in dialogs]))
+check("naming the prompt that is empty",
+      any("10" in d[2] for d in dialogs), str([d[2][:40] for d in dialogs]))
 check("file untouched by the blocked save",
       len(json.loads(prompts_mod.PROMPTS_PATH.read_text(encoding='utf-8'))["prompts"]) == 10)
 
