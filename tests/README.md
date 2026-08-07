@@ -4,7 +4,7 @@
 python tests/run.py
 ```
 
-Runs all eight suites, each in its own process, and prints a line per suite.
+Runs all nine suites, each in its own process, and prints a line per suite.
 About a minute for the lot.
 Exit code is non-zero if any failed. To run a few:
 
@@ -30,6 +30,7 @@ the window manager, not for a mock.
 | `test_resize_guard.py` | Which border pixels start a resize and which must not, walked one pixel at a time | 5 s |
 | `test_watchdog.py` | The stall detector catching a real stall and naming the code that caused it | 10 s |
 | `test_bluetooth.py` | The hands-free mic being avoided — and, more importantly, recording still working on a machine where the headset is the only microphone | 3 s |
+| `test_first_open.py` | That opening the write window does not stall. Has to be its own process: the cost it guards is paid once per process, so checking for it after another suite has opened a window passes whatever the code does | 3 s |
 
 `test_compose.py` needs the Marian translation model. The first run downloads
 it; later ones are fast. `test_bluetooth.py` opens real audio devices.
@@ -53,6 +54,7 @@ a runner cannot tell whether a measurement went well.
 
 | Probe | The question it answers |
 |---|---|
+| `window_open_cost.py` | What opening each of the three windows costs, with a heartbeat on the GUI thread. This is the one that found the first-open stall, and showed it belonged to whichever window went first rather than to the write window |
 | `live_click_map.py` | How much of the orb currently on screen can actually be clicked. This is the one that found the click bug: 18%, in exactly the shape of the drawing |
 | `click_map.py` | The same map, per look, without needing Relay running |
 | `click_alpha.py` | The faintest backing Windows will still let you click. Answer: 1 in 255 |

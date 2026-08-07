@@ -183,6 +183,15 @@ what you fixed, not what came out of the model.
 For a term Whisper keeps mangling, something you are copying off a page, or a
 room where talking is not an option.
 
+The window is built **and shown once off screen** while the speech model is
+loading, so the click that opens it costs about 20 ms. Building it without
+showing it was not enough: the first time any window in the process is shown
+costs a further 400–500 ms — Qt creating the native window and realising its
+paint backend — and that is a cost per process, not per window. Measured, it
+landed on whichever of Relay's three windows was opened first, which is why it
+looked like the write window's fault. Paying it at start-up means none of the
+three ever does.
+
 > **This is a different, much weaker model than the one dictation uses.**
 > Whisper's translate task takes *audio* — it cannot help with anything you
 > type, so this is a separate 300 MB Marian model, downloaded once on first use.
@@ -288,7 +297,7 @@ when you want to watch the output live.
 python tests/run.py
 ```
 
-Eight suites, each in its own process, about a minute for the lot. They
+Nine suites, each in its own process, about a minute for the lot. They
 build real windows and ask Windows itself what it would do, because most of
 what they check cannot be checked any other way — whether a click lands on a
 transparent pixel is a question for the window manager, not for a mock.

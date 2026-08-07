@@ -13,8 +13,8 @@ import threading
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit,
-                               QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
+                               QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from .prompt_editor import BG, LINE, MUTED, PANEL, TEXT
 from .window import FramelessWindow, TitleBar
@@ -307,19 +307,61 @@ class Compose(FramelessWindow):
 
 
 def prebuild(translator, on_paste, target_getter=None):
-    """Construct the window now, without showing it.
+    """Build the window at start-up, and show it once where nobody can see it.
 
-    The first construction costs around 700ms - Qt loading fonts, parsing the
-    stylesheet, creating the native window - and every one after it costs 30.
-    Doing it on the click means the whole cost lands while someone is waiting
-    and moving the mouse. Doing it at start-up, while the speech model is
-    loading anyway, means nobody is waiting for anything.
+    Constructing it is only half the cost. Measured on this machine: building
+    the widget tree is about 200ms, and the first time a window in the process
+    is actually shown costs another 500 - Qt creating the native window,
+    realising the paint backend, loading the font database the style needs.
+    Building without showing left that 500 sitting on the first click, which
+    is exactly where it was reported from.
+
+    It is a per-process cost, not a per-window one, so whichever window is
+    shown first pays it: measured at 416ms for the write window, 543 for the
+    look picker and 432 for the prompt editor, depending only on which was
+    opened first. Paying it here means none of the three ever does.
+
+    Showing off screen and without activating, because this runs several
+    seconds after start-up while the speech model loads - by which time
+    someone may well be typing in another application, and a window that
+    grabs focus then is worse than the lag it is avoiding.
     """
     global _window
     if _window is not None:
         return _window
     _window = Compose(translator, on_paste, target_getter)
+    _warm_up(_window)
     return _window
+
+
+def _warm_up(window):
+    """Take the first-show cost now. See prebuild."""
+    window.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    window.move(-4000, -4000)
+    try:
+        window.show()
+        # The work happens as the show is processed, not in the call itself.
+        QApplication.processEvents()
+        window.hide()
+    finally:
+        window.setAttribute(Qt.WA_ShowWithoutActivating, False)
+        _centre(window)
+
+
+def _centre(window):
+    """Put it back where an unshown window would have opened.
+
+    Not the geometry it had before the warm-up: a window that has never been
+    shown has no position yet, and restoring that nothing pins it to the
+    top-left corner. Qt centres a first-shown window itself, and having taken
+    that first show away, this has to do the same.
+    """
+    screen = QApplication.primaryScreen()
+    if screen is None:
+        return
+    frame = window.frameGeometry()
+    frame.moveCenter(screen.availableGeometry().center())
+    window.move(frame.topLeft())
 
 
 def open_compose(translator, on_paste, target_getter=None):
