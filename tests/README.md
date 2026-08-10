@@ -61,12 +61,13 @@ desktop is a test run you stop doing.
 
 ## `probes/`
 
-Nine scripts that report numbers instead of passing or failing. They are for
+Ten scripts that report numbers instead of passing or failing. They are for
 when something needs investigating, and `run.py` deliberately ignores them —
 a runner cannot tell whether a measurement went well.
 
 | Probe | The question it answers |
 |---|---|
+| `target_text.py` | What another application publishes about itself through UI Automation, and — by snapshotting it twice — which line or button appears only while it is working. That difference is the signal the autopilot needs to know a prompt has finished |
 | `window_open_cost.py` | What opening each of the three windows costs, with a heartbeat on the GUI thread. This is the one that found the first-open stall, and showed it belonged to whichever window went first rather than to the write window |
 | `live_click_map.py` | How much of the orb currently on screen can actually be clicked. This is the one that found the click bug: 18%, in exactly the shape of the drawing |
 | `click_map.py` | The same map, per look, without needing Relay running |
@@ -84,4 +85,9 @@ Run one directly:
 python tests/probes/live_click_map.py
 ```
 
-`live_click_map.py` needs Relay to be running; the rest do not.
+`live_click_map.py` needs Relay to be running; `target_text.py` needs the
+application you want to read to be open. The rest need nothing.
+
+`target_text.py` writes each snapshot to `%TEMP%\relay-target-text` — outside
+the project on purpose, since a snapshot is the whole contents of one of your
+windows.
