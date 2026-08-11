@@ -3,6 +3,7 @@
     {
       "name": "Antigravity",
       "process": "Antigravity.exe",
+      "input": "Message input",
       "busy": {
         "button": "Cancel (Ctrl+D)"
       },
@@ -17,6 +18,7 @@
     {
       "name": "Claude",
       "process": "claude.exe",
+      "input": "Prompt",
       "busy": {
         "line": "stop"
       },

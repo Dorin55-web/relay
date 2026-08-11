@@ -62,6 +62,9 @@ BUILT_IN = [
     {
         "name": "Antigravity",
         "process": "Antigravity.exe",
+        # The accessible name of the box you type in, so a step can be put
+        # there rather than wherever focus happens to be. See focus_input.
+        "input": "Message input",
         "busy": {"button": "Cancel (Ctrl+D)"},
         "idle": {"button": "Send message"},
         # The text alone would be wrong: the request stays in the transcript
@@ -73,6 +76,7 @@ BUILT_IN = [
     {
         "name": "Claude",
         "process": "claude.exe",
+        "input": "Prompt",
         # The two states of the one button under the box you type in. Whole
         # lines, and only from the end of the window: this app publishes the
         # entire conversation as text, and a conversation can say anything -
@@ -88,6 +92,8 @@ BUILT_IN = [
         # the window this is being run from. opencode names its own window.
         "process": "WindowsTerminal.exe",
         "title_contains": ["OC |", "OpenCode"],
+        # No "input": a terminal has no text box to put a cursor in. Bringing
+        # the window forward is all there is, and it is enough.
         "busy": {"text": "esc interrupt"},
         "idle": {"absent_text": "esc interrupt"},
     },
@@ -191,6 +197,36 @@ def _matches(rule, text, buttons):
         if key == "absent_button" and any(wanted_low == b.lower() for b in buttons):
             return False
     return True
+
+
+def focus_input(hwnd, profile):
+    """Put the cursor where this window is typed into, before anything types.
+
+    Bringing a window to the front is not the same as the keyboard reaching
+    its text box. In a Chromium application focus stays on whatever element
+    had it last - the transcript, a button, anything - and a paste sent then
+    goes nowhere while the Enter after it presses whatever is focused.
+    Measured: a step pasted into Claude with focus on its Stop button pressed
+    Stop, which reads in the transcript as the user interrupting the reply.
+
+    Three answers, because there are three situations:
+
+      True  - the caret is in the box
+      False - this window has a box, and it could not be reached
+      None  - it has no such element. A terminal is typed into as a whole,
+              and there is nothing to put a cursor in.
+    """
+    name = (profile or {}).get("input")
+    if not name:
+        return None
+    if uia.focus_named_input(hwnd, name):
+        return True
+    # The accessible name can change with a new version of the application,
+    # and refusing to send for that alone would be its own failure. If the
+    # caret is already somewhere that takes typing, that is enough.
+    from .target import window_rect
+
+    return uia.focused_input(window_rect(hwnd)) is not None
 
 
 def read(hwnd):

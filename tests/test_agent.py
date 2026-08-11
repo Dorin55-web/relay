@@ -115,6 +115,15 @@ check("a cold accessibility tree is unknown, not idle",
       state(cl, "") == agent.UNKNOWN)
 
 
+print("\n--- where a step gets typed ---")
+# focus_input answers None only when the profile names no box, which is how a
+# terminal is told apart from an application that has one. Getting this wrong
+# either types blind into a chat window or refuses to type into a terminal.
+check("a terminal has no box to find", agent.focus_input(0, oc) is None)
+check("nor has a window with no profile", agent.focus_input(0, None) is None)
+check("Claude names its box", cl.get("input") == "Prompt")
+check("Antigravity names its box", ag.get("input"))
+
 print("\n--- nothing recognises nothing ---")
 check("no profile at all", agent.state(0, None) == agent.UNKNOWN)
 check("an empty rule never matches", not agent._matches({}, "anything", []))

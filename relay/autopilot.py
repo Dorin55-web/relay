@@ -73,12 +73,13 @@ class Autopilot:
     """
 
     def __init__(self, send, read_state=None, on_progress=None,
-                 is_window=None, focus=None, log=print,
+                 is_window=None, focus=None, place_caret=None, log=print,
                  poll_seconds=POLL_SECONDS,
                  countdown_seconds=COUNTDOWN_SECONDS, countdown_tick=1.0):
         self.send = send                       # (text, hwnd) -> bool
         self.read_state = read_state or agent.state
         self.focus = focus or focus_window
+        self.place_caret = place_caret or agent.focus_input
         self.is_window = is_window or (lambda hwnd: bool(
             ctypes.windll.user32.IsWindow(hwnd)))
         self.on_progress = on_progress or (lambda *a, **k: None)
@@ -91,6 +92,7 @@ class Autopilot:
 
         self.steps = []
         self.hwnd = None
+        self.profile = None
         self.title = ""
         self.index = 0
         self.phase = STOPPED
@@ -125,6 +127,7 @@ class Autopilot:
             return False
 
         self.steps, self.hwnd = steps, hwnd
+        self.profile = profile
         self.title = window_title(hwnd)
         self.index, self.reason = 0, ""
         self._stop.clear()
@@ -248,7 +251,18 @@ class Autopilot:
         if not self.focus(self.hwnd):
             self.reason = f"could not bring {self.title!r} to the front"
             return False
-        time.sleep(0.12)      # let the app settle its caret before Ctrl+V
+        time.sleep(0.12)      # let the app settle before asking for the caret
+
+        # Then the box inside it. A window in front is not a cursor in a text
+        # field: what follows is Ctrl+V and Enter, and sent blind they go to
+        # whatever element holds focus - which has, measured, meant pressing
+        # the target's own Stop button and cutting off the reply. Better to
+        # send nothing and say so.
+        if self.place_caret(self.hwnd, self.profile) is False:
+            self.reason = (f"could not put the cursor in the box to type in, "
+                           f"so nothing was sent to {self.title!r}")
+            return False
+
         self.log(f"[auto] step {self.index + 1}/{len(self.steps)} -> {text[:60]!r}")
         if not self.send(text, self.hwnd):
             self.reason = "the paste failed"

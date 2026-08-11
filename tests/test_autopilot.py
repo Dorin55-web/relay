@@ -44,6 +44,9 @@ class Fake:
         # being able to fail: a paste that goes ahead without the target in
         # front lands in whatever was.
         self.focusable = True
+        # What focus_input would answer: True placed, False could not, None
+        # nothing to place (a terminal).
+        self.caret = None
 
     def read(self, _hwnd):
         self.reads += 1
@@ -63,6 +66,7 @@ class Fake:
             read_state=self.read,
             is_window=lambda _h: self.alive,
             focus=lambda _h: self.focusable,
+            place_caret=lambda _h, _p: self.caret,
             log=lambda *_: None,
             **settings,
         )
@@ -188,6 +192,29 @@ window.focusable = False
 pilot = run(window.pilot(), ["one"], seconds=1.5)
 check("sent nothing", window.sent == [], str(window.sent))
 check("and said why", "front" in pilot.reason, pilot.reason)
+
+print("\n--- will not type into a window whose box it could not reach ---")
+# The one that shipped broken. Bringing a window forward does not put the
+# caret in its text box, and Ctrl+V followed by Enter sent blind goes to
+# whatever element has focus. Measured against Claude: it pressed that
+# window's own Stop button and cut off the reply that was being written.
+window = Fake(agent.IDLE, on_send=works_then_finishes)
+window.caret = False
+pilot = run(window.pilot(), ["one"], seconds=1.5)
+check("sent nothing", window.sent == [], str(window.sent))
+check("and said why", "cursor" in pilot.reason, pilot.reason)
+
+window = Fake(agent.IDLE, on_send=works_then_finishes)
+window.caret = True
+pilot = run(window.pilot(), ["one"], seconds=2.0)
+check("sends once the caret is in the box", window.sent == ["one"], str(window.sent))
+
+# A terminal has no such element, and typing reaches it anyway. Refusing
+# there would have broken opencode to fix Claude.
+window = Fake(agent.IDLE, on_send=works_then_finishes)
+window.caret = None
+pilot = run(window.pilot(), ["one"], seconds=2.0)
+check("sends where there is no box to find", window.sent == ["one"], str(window.sent))
 
 print("\n--- refuses to start on nothing ---")
 window = Fake(agent.IDLE)
