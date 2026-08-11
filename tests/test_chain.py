@@ -6,6 +6,7 @@ that editing a step edits the right one, and that a chain aimed at a window
 Relay cannot read is refused with a reason rather than starting and stalling.
 """
 import sys
+import threading
 import time
 
 import context  # noqa: E402,F401
@@ -34,10 +35,29 @@ def send(text, _hwnd):
     return True
 
 
-def window(target=HWND, states=None):
-    """A chain window pointed at a fake target, with a scripted state reader."""
-    win = ChainWindow(prompts_mod.load, lambda: target, send)
-    # Everything below the window is stubbed: this suite is about the widgets.
+class Target:
+    """A window that behaves like a real one: picks the work up, then finishes.
+
+    A fake that stays idle after being sent a prompt makes the queue wait out
+    START_SECONDS looking for a start that never comes - which is correct of
+    it, and useless as a stand-in for an application.
+    """
+
+    def __init__(self):
+        self.state = agent.IDLE
+
+    def read(self, _hwnd):
+        return self.state
+
+    def send(self, text, _hwnd):
+        sent.append(text)
+        self.state = agent.BUSY
+        threading.Timer(0.15, lambda: setattr(self, "state", agent.IDLE)).start()
+        return True
+
+
+def stub(win, states=None):
+    """Everything below the window: this suite is about the widgets."""
     win.pilot.read_state = (states or (lambda _h: agent.BUSY))
     win.pilot.is_window = lambda _h: True
     win.pilot.focus = lambda _h: True
@@ -45,6 +65,11 @@ def window(target=HWND, states=None):
     win.pilot.countdown_seconds = 1
     win.pilot.countdown_tick = 0.02
     return win
+
+
+def window(target=HWND, states=None):
+    """A chain window pointed at a fake target, with a scripted state reader."""
+    return stub(ChainWindow(prompts_mod.load, lambda: target, send), states)
 
 
 def settle(win, seconds=1.5):
@@ -141,6 +166,44 @@ check("not left on top", not bool(win.windowFlags() & 0x00040000))
 check("the buttons came back", win.start_btn.text() == "Start")
 check("the step is editable again", not win.text.isReadOnly())
 win.close()
+
+print("\n--- closing it while a chain runs does not stop the chain ---")
+# It used to. A three-step chain sent one step and stopped, because the window
+# was sitting in front of the application being driven and got closed.
+sent.clear()
+target = Target()
+# Through the real entry point this time, and actually on screen: the window
+# has to be visible for hiding it to mean anything, and open_chain is what
+# has to hand the running one back rather than building a second.
+win = chain_mod.open_chain(prompts_mod.load, lambda: HWND, target.send)
+stub(win, target.read)
+app.processEvents()
+check("on screen to begin with", win.isVisible())
+for _ in range(2):
+    win.library.setCurrentRow(0)
+    win._add()
+win.chain.setCurrentRow(0)
+win.text.setPlainText("one")
+win.chain.setCurrentRow(1)
+win.text.setPlainText("two")
+win._start_or_stop()
+check("started with two steps", win.pilot.running)
+
+win.close()
+app.processEvents()
+check("the window went away", not win.isVisible())
+check("but the chain did not", win.pilot.running)
+check("and it is still the same window", chain_mod.running_window() is win)
+
+settle(win, 4.0)
+check("both steps went out", sent == ["one", "two"], str(sent))
+check("and it came back to report", win.isVisible())
+
+print("\n--- closing it when nothing is running really closes ---")
+win.close()
+app.processEvents()
+check("gone", not win.isVisible())
+check("and forgotten", chain_mod.running_window() is None)
 
 print("\n--- a target Relay cannot read ---")
 sent.clear()

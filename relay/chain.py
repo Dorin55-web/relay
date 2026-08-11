@@ -327,6 +327,12 @@ class ChainWindow(FramelessWindow):
                 f" - {self.pilot.reason}" if self.pilot.reason else ""))
             self._stay_on_top(False)
             self._show_buttons()
+            if not self.isVisible():
+                # Closed to get it out of the way while the chain ran. Now
+                # there is something to say, so it comes back - without
+                # raising or activating, because the chain has just been
+                # typing into another window and you are probably reading it.
+                self.show()
         else:
             self.status.setText(f"{step}: {PHRASES.get(phase, phase)}")
 
@@ -336,7 +342,25 @@ class ChainWindow(FramelessWindow):
     # --- lifecycle --------------------------------------------------------
 
     def closeEvent(self, event):
+        """Closing gets the window out of the way. It does not stop the chain.
+
+        It used to. The reasoning was that this window holds the only Stop
+        button, so letting it go would leave a queue running with no way to
+        reach it - but that was wrong twice over. A keystroke stops a chain
+        from anywhere, so it was never unreachable; and the reason to close
+        this window mid-chain is that it is in front of the thing you are
+        watching, which is not a reason to abandon the chain. Measured in the
+        log: a three-step chain sent one step and stopped, because the window
+        was in the way and got closed.
+
+        So while a chain runs, closing hides. The window comes back by itself
+        when the chain ends, and the menu opens this one rather than a second.
+        """
         global _window
+        if self.pilot.running:
+            self.hide()
+            event.ignore()
+            return
         self._watch.stop()
         self.pilot.stop("the window was closed")
         _window = None
@@ -374,9 +398,15 @@ QLabel#status {{ color: {MUTED}; font-size: 12px; }}
 
 
 def open_chain(prompts_getter, target_getter, send):
-    """Show the chain window, or raise the one already open."""
+    """Show the chain window, or bring back the one that already exists.
+
+    Not `isVisible()`. A window hidden because a chain is running is still the
+    window that chain belongs to, and building a second one would leave the
+    first sending prompts with nothing on screen attached to it.
+    """
     global _window
-    if _window is not None and _window.isVisible():
+    if _window is not None:
+        _window.show()
         _window.raise_()
         _window.activateWindow()
         return _window
