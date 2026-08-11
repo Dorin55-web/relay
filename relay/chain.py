@@ -18,7 +18,7 @@ touching widgets from that thread is how you get a crash that only happens on
 someone else's machine.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QPlainTextEdit,
                                QPushButton, QVBoxLayout)
@@ -31,6 +31,10 @@ from .target import window_title
 from .window import FramelessWindow, TitleBar
 
 _window = None
+
+# Only a window title and a process name, so this is cheap enough to do while
+# you are typing in the box above it.
+TARGET_REFRESH_MS = 1000
 
 PHRASES = {
     HOLDING: "waiting for it to finish",
@@ -68,6 +72,14 @@ class ChainWindow(FramelessWindow):
         self._fill_library()
         self._show_steps()
         self._show_target()
+
+        # The target is whichever window you last clicked into, and you will
+        # click into it after opening this - so a line read once at startup
+        # would spend the whole time you were building the chain naming the
+        # wrong application, or none.
+        self._watch = QTimer(self)
+        self._watch.timeout.connect(self._show_target)
+        self._watch.start(TARGET_REFRESH_MS)
 
     # --- layout -----------------------------------------------------------
 
@@ -313,6 +325,7 @@ class ChainWindow(FramelessWindow):
 
     def closeEvent(self, event):
         global _window
+        self._watch.stop()
         self.pilot.stop("the window was closed")
         _window = None
         super().closeEvent(event)
