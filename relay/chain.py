@@ -92,9 +92,9 @@ class ChainWindow(FramelessWindow):
         self.chain.currentRowChanged.connect(self._select_step)
 
         add = self._button("Add  →", self._add)
-        self.up_btn = self._button("↑", lambda: self._move(-1), width=34)
-        self.down_btn = self._button("↓", lambda: self._move(1), width=34)
-        self.del_btn = self._button("✕", self._remove, width=34)
+        self.up_btn = self._step_button("↑", "Move up", lambda: self._move(-1))
+        self.down_btn = self._step_button("↓", "Move down", lambda: self._move(1))
+        self.del_btn = self._step_button("✕", "Remove", self._remove)
 
         order = QVBoxLayout()
         order.setSpacing(6)
@@ -167,11 +167,23 @@ class ChainWindow(FramelessWindow):
         label.setObjectName("field")
         return label
 
-    def _button(self, text, slot, width=None):
+    def _button(self, text, slot):
         button = QPushButton(text)
         button.clicked.connect(slot)
-        if width:
-            button.setFixedWidth(width)
+        return button
+
+    def _step_button(self, glyph, tip, slot):
+        """One of the three square buttons between the lists.
+
+        Their own object name, because the ordinary button padding in the
+        sheet is 16 pixels a side. Against a fixed 34-pixel width that leaves
+        two pixels for the arrow, and the button comes up blank.
+        """
+        button = QPushButton(glyph)
+        button.setObjectName("step")
+        button.setToolTip(tip)
+        button.setFixedSize(34, 30)
+        button.clicked.connect(slot)
         return button
 
     # --- the chain --------------------------------------------------------
@@ -347,6 +359,16 @@ QPlainTextEdit {{
     padding: 8px;
     color: {TEXT};
 }}
+QPushButton#step {{
+    background: {PANEL};
+    border: 1px solid {LINE};
+    border-radius: 6px;
+    padding: 0;
+    font-size: 15px;
+    color: {TEXT};
+}}
+QPushButton#step:hover {{ background: {LINE}; }}
+QPushButton#step:disabled {{ color: {LINE}; }}
 QLabel#status {{ color: {MUTED}; font-size: 12px; }}
 """
 

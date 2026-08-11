@@ -89,6 +89,17 @@ check("the list caption followed", "Find the cause" in win.chain.item(0).text())
 win.chain.setCurrentRow(1)
 check("selecting shows that step's text", win.text.toPlainText() == win.steps[1])
 
+print("\n--- the small buttons can show what they say ---")
+# They came up blank once. A fixed 34-pixel width against the sheet's 16
+# pixels of padding a side left two pixels for the arrow, and a button with
+# no glyph in it looks like a button that does nothing.
+for name, button in [("up", win.up_btn), ("down", win.down_btn),
+                     ("remove", win.del_btn)]:
+    wanted = button.sizeHint().width()
+    check(f"the {name} button fits its glyph",
+          button.minimumWidth() >= wanted,
+          f"{button.minimumWidth()}px wide, needs {wanted}px")
+
 print("\n--- reordering and removing ---")
 first, second = win.steps
 win.chain.setCurrentRow(0)
