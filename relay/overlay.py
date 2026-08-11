@@ -266,7 +266,8 @@ def _make_non_activating(widget):
 class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
                  prompts_getter=None, on_prompt=None, on_edit_prompts=None,
-                 on_compose=None, on_pick_look=None, orb_settings=None):
+                 on_compose=None, on_pick_look=None, on_chain=None,
+                 orb_settings=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
         # Qt quits once the last primary window closes, and a Qt.Tool window -
         # which the dot is - does not count as one. Without this, closing the
@@ -280,6 +281,7 @@ class Orb(QWidget):
         self.on_edit_prompts = on_edit_prompts
         self.on_compose = on_compose
         self.on_pick_look = on_pick_look
+        self.on_chain = on_chain
         self.menu = None
         self._hotkey_label = tooltip
         self._prompts_getter = prompts_getter or (lambda: [])
@@ -393,6 +395,15 @@ class Orb(QWidget):
             )
             write_act.triggered.connect(self._fire_compose)
             self.menu.addAction(write_act)
+
+        if self.on_chain is not None:
+            chain_act = QAction("Run a chain of prompts...", self)
+            chain_act.setToolTip(
+                "Queue several prompts and send each one when the last has "
+                "finished"
+            )
+            chain_act.triggered.connect(self._fire_chain)
+            self.menu.addAction(chain_act)
 
         if self.on_pick_look is not None:
             look_act = QAction("Change how it looks...", self)
@@ -545,6 +556,14 @@ class Orb(QWidget):
             self.on_pick_look()
         except Exception as exc:
             print(f"[orb] could not open the look picker: {exc}")
+
+    def _fire_chain(self):
+        if self.on_chain is None:
+            return
+        try:
+            self.on_chain()
+        except Exception as exc:
+            print(f"[orb] could not open the chain window: {exc}")
 
     def _fire_edit_prompts(self):
         if self.on_edit_prompts is None:

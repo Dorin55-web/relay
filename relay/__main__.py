@@ -96,6 +96,12 @@ class VoicePrompt:
         Opening an audio stream can easily take that long, so all we do here is
         queue the request and let the control thread do the work.
         """
+        # Any key at all, not just the hotkey, and before the hotkey test: a
+        # keystroke during a chain's countdown means you are at the desk, and
+        # you outrank the queue. Setting an event is instant, which matters -
+        # this runs inside the Windows keyboard hook.
+        self._tell_chain_you_typed()
+
         if not self._hotkey_matches(key):
             return
         # Windows repeats key-down events while a key is held; without this the
@@ -105,6 +111,28 @@ class VoicePrompt:
         self._key_held = True
         self._optimistic_ui()
         self._commands.put("toggle")
+
+    def _tell_chain_you_typed(self):
+        """Runs on every keystroke, inside the Windows keyboard hook.
+
+        Which is why it looks the module up in sys.modules rather than
+        importing it. An import statement here would be free every time but
+        the first - and that first one, on a session that has just opened the
+        chain window, would load Qt's widgets from inside the hook. A hook
+        that takes longer than LowLevelHooksTimeout is removed by Windows
+        without a word, and F9 would stop working for the rest of the session.
+
+        No chain window ever opened means no module, means nothing to do.
+        """
+        module = sys.modules.get("relay.chain")
+        if module is None:
+            return
+        try:
+            window = module.running_window()
+            if window is not None:
+                window.user_typed()
+        except Exception:
+            pass
 
     def on_release(self, key):
         if self._hotkey_matches(key):
@@ -417,6 +445,36 @@ class VoicePrompt:
             self.feedback.error(f"could not open the prompt editor: {exc}")
             prompts_mod.open_for_editing()
 
+    def open_chain(self):
+        """Open the window that queues prompts into another application."""
+        from .chain import open_chain
+
+        try:
+            with self._hooks_down("the chain window"):
+                open_chain(
+                    prompts_getter=prompts_mod.load,
+                    # The window you last clicked into, read when Start is
+                    # pressed rather than when the window opened - you will
+                    # almost certainly click into the target after building
+                    # the chain.
+                    target_getter=lambda: (
+                        self.tracker.current() if self.tracker is not None else None
+                    ),
+                    send=self._send_step,
+                )
+        except Exception as exc:
+            self.feedback.error(f"could not open the chain window: {exc}")
+
+    def _send_step(self, text, hwnd):
+        """Paste one step of a chain and submit it.
+
+        Runs on the autopilot's thread, which is what makes the sleeps inside
+        paste_text harmless. submit=True whatever the config says: a step of a
+        chain is meant to be sent, and one left sitting in the box would stop
+        the chain at the next state check anyway.
+        """
+        return paste_text(text, self.config, target_hwnd=hwnd, submit=True)
+
     def pick_look(self):
         """Open the window that chooses what the orb draws in each state."""
         from .look_picker import open_picker
@@ -532,6 +590,7 @@ class VoicePrompt:
             on_edit_prompts=self.edit_prompts,
             on_compose=self.open_compose,
             on_pick_look=self.pick_look,
+            on_chain=self.open_chain,
             orb_settings=self.config["orb"],
         )
         self.orb.level_getter = lambda: self.recorder.level
