@@ -69,6 +69,30 @@ def window_pid(hwnd):
     return pid.value
 
 
+def window_process(hwnd):
+    """Executable behind a window, e.g. 'Antigravity.exe'.
+
+    Which app a window belongs to is the first half of recognising it. The
+    title is the other half, and on its own neither is enough: every terminal
+    is WindowsTerminal.exe, and a title alone is whatever the app felt like.
+    """
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, window_pid(hwnd))
+    if not handle:
+        return ""
+    try:
+        size = wt.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(
+                handle, 0, buffer, ctypes.byref(size)):
+            return os.path.basename(buffer.value)
+        return ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def foreground_window():
     try:
         return _u32().GetForegroundWindow()

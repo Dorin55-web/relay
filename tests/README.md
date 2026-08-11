@@ -61,13 +61,14 @@ desktop is a test run you stop doing.
 
 ## `probes/`
 
-Ten scripts that report numbers instead of passing or failing. They are for
+Eleven scripts that report numbers instead of passing or failing. They are for
 when something needs investigating, and `run.py` deliberately ignores them —
 a runner cannot tell whether a measurement went well.
 
 | Probe | The question it answers |
 |---|---|
-| `target_text.py` | What another application publishes about itself through UI Automation, and — by snapshotting it twice — which line or button appears only while it is working. That difference is the signal the autopilot needs to know a prompt has finished |
+| `target_text.py` | What another application publishes about itself through UI Automation, and — by snapshotting it twice — which line or button appears only while it is working. That difference is the signal the autopilot needs to know a prompt has finished. Both profiles in `profiles.json` came out of this |
+| `agent_state.py` | Whether the profile written from those measurements then calls the state correctly on its own, live, while you use the application. Prints every change with the evidence behind it |
 | `window_open_cost.py` | What opening each of the three windows costs, with a heartbeat on the GUI thread. This is the one that found the first-open stall, and showed it belonged to whichever window went first rather than to the write window |
 | `live_click_map.py` | How much of the orb currently on screen can actually be clicked. This is the one that found the click bug: 18%, in exactly the shape of the drawing |
 | `click_map.py` | The same map, per look, without needing Relay running |

@@ -1,0 +1,25 @@
+{
+  "profiles": [
+    {
+      "name": "Antigravity",
+      "process": "Antigravity.exe",
+      "busy": {
+        "button": "Cancel (Ctrl+D)"
+      },
+      "idle": {
+        "button": "Send message"
+      }
+    },
+    {
+      "name": "opencode",
+      "process": "WindowsTerminal.exe",
+      "title_contains": "OC |",
+      "busy": {
+        "text": "esc interrupt"
+      },
+      "idle": {
+        "absent_text": "esc interrupt"
+      }
+    }
+  ]
+}

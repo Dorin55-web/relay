@@ -11,14 +11,16 @@ until something asks twice. So: point this at a window and it reports what came
 back.
 
 Run it once while the agent is working, once after it has finished, and the
-difference between the two snapshots is the signal the autopilot needs.
+difference between the two snapshots is the signal the autopilot needs. This is
+where the profiles in relay/agent.py came from - `Cancel (Ctrl+D)` for
+Antigravity, `esc interrupt` for opencode - and where a new application's
+profile comes from too.
 
     python tests/probes/target_text.py
 
 Nothing here passes or fails. It prints what it found.
 """
 import ctypes
-import ctypes.wintypes as wt
 import sys
 import tempfile
 import time
@@ -33,154 +35,36 @@ try:
 except Exception:
     pass
 
-from relay import uia                                        # noqa: E402
-from relay.target import window_class, window_pid, window_title  # noqa: E402
+from relay import uia                                             # noqa: E402
+from relay.target import (window_class, window_pid,               # noqa: E402
+                          window_process, window_title)
 
 FOCUS_SECONDS = 5
 LINES_SHOWN = 30
-MAX_BUTTONS = 400
+
+# Something this probe prints and nothing else does. If it comes back in a
+# snapshot, we read our own console.
+OWN_OUTPUT = "label this state"
 
 user32 = ctypes.windll.user32
 
-# The generated comtypes module normally carries these, but the numbers are
-# fixed by the UIA spec and a missing constant should not stop the probe.
-IDS = {
-    "UIA_TextPatternId": 10014,
-    "UIA_IsTextPatternAvailablePropertyId": 30040,
-    "UIA_NamePropertyId": 30005,
-    "UIA_ControlTypePropertyId": 30003,
-    "UIA_ButtonControlTypeId": 50000,
-    "TreeScope_Descendants": 4,
-}
 
-
-def uia_id(UIA, name):
-    return getattr(UIA, name, IDS[name])
-
-
-def process_name(pid):
-    """Executable behind a window, so the report names the app, not a number."""
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return "?"
-    try:
-        size = wt.DWORD(1024)
-        buf = ctypes.create_unicode_buffer(size.value)
-        if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return Path(buf.value).name
-        return "?"
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def read_text(auto, UIA, root):
-    """All text the window publishes, and which element published it.
-
-    The root element usually supports nothing. In Windows Terminal the text
-    provider hangs off the terminal control inside; in a Chromium app it is
-    the document. So ask for every descendant that claims a TextPattern and
-    take whichever gave the most, rather than assuming where it lives.
-    """
-    condition = auto.CreatePropertyCondition(
-        uia_id(UIA, "UIA_IsTextPatternAvailablePropertyId"), True)
-    try:
-        found = root.FindAll(uia_id(UIA, "TreeScope_Descendants"), condition)
-    except Exception as exc:
-        return "", f"FindAll failed: {exc}", 0
-
-    candidates = []
-    count = found.Length if found else 0
-    for i in range(count):
-        element = found.GetElement(i)
-        try:
-            pattern = element.GetCurrentPattern(uia_id(UIA, "UIA_TextPatternId"))
-            if not pattern:
-                continue
-            pattern = pattern.QueryInterface(UIA.IUIAutomationTextPattern)
-            # -1 means no limit. A terminal can hand back its whole scrollback.
-            text = pattern.DocumentRange.GetText(-1) or ""
-            if text.strip():
-                candidates.append((len(text), element.CurrentName or "(unnamed)", text))
-        except Exception:
-            continue
-
-    if not candidates:
-        return "", "no element returned any text", count
-    candidates.sort(key=lambda c: -c[0])
-    return candidates[0][2], candidates[0][1], count
-
-
-def read_buttons(auto, UIA, root):
-    """Names of every button in the tree.
-
-    A cache request is not an optimisation here. Reading Name off an element
-    is a call into the other process; on an Electron tree that is thousands of
-    round trips and the probe appears to hang. Asking for the names up front
-    fetches them in one.
-    """
-    condition = auto.CreatePropertyCondition(
-        uia_id(UIA, "UIA_ControlTypePropertyId"),
-        uia_id(UIA, "UIA_ButtonControlTypeId"))
-    cache = auto.CreateCacheRequest()
-    cache.AddProperty(uia_id(UIA, "UIA_NamePropertyId"))
-    try:
-        found = root.FindAllBuildCache(
-            uia_id(UIA, "TreeScope_Descendants"), condition, cache)
-    except Exception as exc:
-        return [f"(FindAllBuildCache failed: {exc})"]
-
-    names = []
-    for i in range(min(found.Length if found else 0, MAX_BUTTONS)):
-        try:
-            name = clean(found.GetElement(i).CachedName or "")
-        except Exception:
-            continue
-        if name:
-            names.append(name)
-    return names
+def useful_lines(text):
+    return [c for c in (uia.clean(ln) for ln in text.splitlines()) if c]
 
 
 def snapshot(hwnd, label):
-    auto, UIA = uia._uia()
-    if auto is None:
-        raise SystemExit("UI Automation is unavailable - nothing to probe")
-
     started = time.perf_counter()
-    root = auto.ElementFromHandle(hwnd)
-    text, source, providers = read_text(auto, UIA, root)
-    buttons = read_buttons(auto, UIA, root)
+    text, source = uia.window_text(hwnd)
+    buttons = uia.window_buttons(hwnd)
     return {
         "label": label,
         "title": window_title(hwnd),
         "text": text,
         "source": source,
-        "providers": providers,
         "buttons": buttons,
         "seconds": time.perf_counter() - started,
     }
-
-
-def clean(line):
-    """Readable on a console, and comparable between snapshots.
-
-    Chromium marks every embedded object with U+FFFC, and a tree walked twice
-    does not place them identically. Left in, they turn lines that are really
-    the same into differences, which is the one thing this probe must not do.
-    """
-    line = line.replace("￼", " ").replace("​", "")
-    line = "".join(c if c.isprintable() or c == "\t" else " " for c in line)
-    return " ".join(line.split())
-
-
-def useful_lines(text):
-    return [c for c in (clean(ln) for ln in text.splitlines()) if c]
-
-
-# Something this probe prints and nothing else does. If it comes back in a
-# snapshot, we read our own console.
-OWN_OUTPUT = "label this state"
 
 
 def report(shot):
@@ -192,10 +76,11 @@ def report(shot):
         print("     target sharing a window with this console reads as this")
         print("     console. Put the target in a separate terminal WINDOW")
         print("     (Ctrl+Shift+N), not another tab.")
+
     print(f"\n=== {shot['label']} ===   ({shot['seconds']:.2f}s)")
     print(f"  title      {shot['title']!r}")
     print(f"  text       {len(shot['text'])} chars, {len(lines)} non-blank lines")
-    print(f"  from       {shot['source']}  ({shot['providers']} element(s) offer text)")
+    print(f"  from       {shot['source']}")
     print(f"  buttons    {len(shot['buttons'])}")
     if lines:
         print(f"\n  last {min(LINES_SHOWN, len(lines))} lines:")
@@ -230,7 +115,7 @@ def compare(older, newer):
 
     print("\n  A line or button that shows up on exactly one side is a candidate")
     print("  signal. Prefer one that is short, fixed, and clearly about state -")
-    print("  'esc to interrupt', 'Stop', 'Cancel' - over anything that carries")
+    print("  'esc interrupt', 'Stop', 'Cancel' - over anything that carries")
     print("  the model's own words, which will differ every run.")
 
 
@@ -243,9 +128,9 @@ hwnd = user32.GetForegroundWindow()
 if not hwnd:
     raise SystemExit("no foreground window")
 
-pid = window_pid(hwnd)
 print(f"\nlocked on  {window_title(hwnd)!r}")
-print(f"  hwnd {hwnd}   class {window_class(hwnd)!r}   {process_name(pid)} (pid {pid})")
+print(f"  hwnd {hwnd}   class {window_class(hwnd)!r}   "
+      f"{window_process(hwnd)} (pid {window_pid(hwnd)})")
 print("\nThe window is held by handle, so it does not need to stay in front -")
 print("come back here and take a snapshot whenever it is in a state worth naming.")
 

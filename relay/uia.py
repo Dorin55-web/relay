@@ -1,10 +1,16 @@
-"""Find and focus a text box through UI Automation.
+"""Read another application's window through UI Automation.
 
 Chromium-based apps expose no Win32 caret, so there is no way to ask them where
 the text cursor was. They do publish an accessibility tree, in which a text box
 appears as a named, keyboard-focusable element with its own bounds - enough to
 focus it directly, with no synthetic clicking and no guessing from where you
 last clicked.
+
+The same tree answers a second question: what does that window currently say?
+Windows publishes it for screen readers, so it costs nothing to ask, and it is
+how the autopilot tells an agent that is still working from one that has
+finished. Measured on a Chromium app: 13500 characters and 77 buttons in 0.35s.
+On Windows Terminal: the visible screen, in 0.04s.
 """
 
 import threading
@@ -18,6 +24,107 @@ CLSID_CUIAutomation = "{ff48dba4-60ef-4201-aa87-54103eef594e}"
 # list are focusable too, and focusing those puts the cursor nowhere useful.
 MAX_INPUT_HEIGHT = 300
 MAX_INPUT_AREA_FRACTION = 0.4
+
+MAX_BUTTONS = 400
+
+# The generated comtypes module normally carries these, but the numbers are
+# fixed by the UIA spec and a missing constant should not stop a read.
+IDS = {
+    "UIA_TextPatternId": 10014,
+    "UIA_IsTextPatternAvailablePropertyId": 30040,
+    "UIA_NamePropertyId": 30005,
+    "UIA_ControlTypePropertyId": 30003,
+    "UIA_ButtonControlTypeId": 50000,
+    "TreeScope_Descendants": 4,
+}
+
+
+def _id(UIA, name):
+    return getattr(UIA, name, IDS[name])
+
+
+def clean(line):
+    """Readable, and comparable between two reads of the same window.
+
+    Chromium marks every embedded object with U+FFFC, and a tree walked twice
+    does not place them identically. Left in, they turn lines that are really
+    the same into differences - which would make a state detector fire on its
+    own noise.
+    """
+    line = line.replace("￼", " ").replace("​", "")
+    line = "".join(c if c.isprintable() or c == "\t" else " " for c in line)
+    return " ".join(line.split())
+
+
+def window_text(hwnd):
+    """Everything the window publishes as text, and which element published it.
+
+    The root element usually supports nothing. In Windows Terminal the text
+    provider hangs off the terminal control inside; in a Chromium app it is the
+    document. So ask every descendant that claims a TextPattern and keep
+    whichever gave the most, rather than assuming where it lives.
+
+    Returns (text, source_name). Empty text is a real answer, not a failure.
+    """
+    auto, UIA = _uia()
+    if auto is None:
+        return "", "UI Automation unavailable"
+    try:
+        root = auto.ElementFromHandle(hwnd)
+        condition = auto.CreatePropertyCondition(
+            _id(UIA, "UIA_IsTextPatternAvailablePropertyId"), True)
+        found = root.FindAll(_id(UIA, "TreeScope_Descendants"), condition)
+    except Exception as exc:
+        return "", f"could not read: {exc}"
+
+    best = ("", "no element returned any text")
+    for i in range(found.Length if found else 0):
+        try:
+            element = found.GetElement(i)
+            pattern = element.GetCurrentPattern(_id(UIA, "UIA_TextPatternId"))
+            if not pattern:
+                continue
+            pattern = pattern.QueryInterface(UIA.IUIAutomationTextPattern)
+            text = pattern.DocumentRange.GetText(-1) or ""   # -1 means no limit
+            if text.strip() and len(text) > len(best[0]):
+                best = (text, element.CurrentName or "(unnamed)")
+        except Exception:
+            continue
+    return best
+
+
+def window_buttons(hwnd):
+    """Names of every button in the window.
+
+    A cache request is not an optimisation here. Reading Name off an element is
+    a call into the other process; on a Chromium tree that is thousands of round
+    trips and the read appears to hang. Asking for the names up front fetches
+    them in one.
+    """
+    auto, UIA = _uia()
+    if auto is None:
+        return []
+    try:
+        root = auto.ElementFromHandle(hwnd)
+        condition = auto.CreatePropertyCondition(
+            _id(UIA, "UIA_ControlTypePropertyId"),
+            _id(UIA, "UIA_ButtonControlTypeId"))
+        cache = auto.CreateCacheRequest()
+        cache.AddProperty(_id(UIA, "UIA_NamePropertyId"))
+        found = root.FindAllBuildCache(
+            _id(UIA, "TreeScope_Descendants"), condition, cache)
+    except Exception:
+        return []
+
+    names = []
+    for i in range(min(found.Length if found else 0, MAX_BUTTONS)):
+        try:
+            name = clean(found.GetElement(i).CachedName or "")
+        except Exception:
+            continue
+        if name:
+            names.append(name)
+    return names
 
 
 def _uia():
