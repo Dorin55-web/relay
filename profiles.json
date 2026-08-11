@@ -28,7 +28,10 @@
     {
       "name": "opencode",
       "process": "WindowsTerminal.exe",
-      "title_contains": "OC |",
+      "title_contains": [
+        "OC |",
+        "OpenCode"
+      ],
       "busy": {
         "text": "esc interrupt"
       },

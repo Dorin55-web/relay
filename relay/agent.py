@@ -87,7 +87,7 @@ BUILT_IN = [
         # Any terminal is WindowsTerminal.exe, so the process alone would match
         # the window this is being run from. opencode names its own window.
         "process": "WindowsTerminal.exe",
-        "title_contains": "OC |",
+        "title_contains": ["OC |", "OpenCode"],
         "busy": {"text": "esc interrupt"},
         "idle": {"absent_text": "esc interrupt"},
     },
@@ -132,11 +132,27 @@ def profile_for(hwnd, profiles=None):
         wanted = profile.get("process")
         if wanted and wanted.lower() != process.lower():
             continue
-        contains = profile.get("title_contains")
-        if contains and contains not in title:
+        if not _title_matches(profile.get("title_contains"), title):
             continue
         return profile
     return None
+
+
+def _title_matches(wanted, title):
+    """True when the title carries any of the fragments the profile asks for.
+
+    A list, not one string, because an application does not always call its
+    window the same thing. opencode titles a named session `OC | <name>` and
+    an unnamed one just `OpenCode`, and a profile that only knew the first
+    stopped recognising the second - which is the state it is in when you have
+    only just opened it, and so the state you would most often start a chain
+    from.
+    """
+    if not wanted:
+        return True
+    fragments = [wanted] if isinstance(wanted, str) else list(wanted)
+    lowered = title.lower()
+    return any(str(f).lower() in lowered for f in fragments)
 
 
 def _tail(text):

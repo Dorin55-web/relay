@@ -54,6 +54,24 @@ check("working", state(oc, "x esc interrupt tab agents ctrl+p") == agent.BUSY)
 check("finished", state(oc, "9.6K (1%) ctrl+p commands") == agent.IDLE)
 
 
+print("\n--- which window a profile answers to ---")
+# opencode calls a named session's window `OC | <name>` and a brand new one
+# just `OpenCode`. Only the first was known at first, so a chain started
+# against a freshly opened opencode was refused - and freshly opened is
+# exactly when you start one.
+check("a named session", agent._title_matches(oc["title_contains"],
+                                              "OC | Scriere text 400 cuvinte"))
+check("one with no name yet", agent._title_matches(oc["title_contains"],
+                                                   "OpenCode"))
+check("whatever the case", agent._title_matches(oc["title_contains"], "opencode"))
+# Without the title test the process alone would match every terminal on the
+# machine, including the one a probe or a test is running in.
+check("not any other terminal",
+      not agent._title_matches(oc["title_contains"], "Command Prompt"))
+check("no fragments asked for means any title",
+      agent._title_matches(None, "anything at all"))
+
+
 print("\n--- Claude: whole lines, from the end only ---")
 cl = BY_NAME["Claude"]
 FOOTER = ["Bypass permissions", "Add", "Press and hold to record",
