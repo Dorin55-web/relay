@@ -8,6 +8,10 @@
       },
       "idle": {
         "button": "Send message"
+      },
+      "waiting": {
+        "text": "Requesting permission",
+        "absent_button": "Send message"
       }
     },
     {

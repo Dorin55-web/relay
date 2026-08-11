@@ -16,6 +16,14 @@ that fails to match look finished - including one that was read halfway through
 a repaint, and including an application with no profile at all. Requiring the
 idle rule to match as well means the answer is UNKNOWN unless the window
 actually said so, and UNKNOWN never advances a queue.
+
+That is what makes the dangerous case safe for free. An agent stopped at a
+permission prompt has finished nothing, but it has stopped moving, and to
+anything watching for stillness it looks done - which is how a queue ends up
+typing its next prompt over a dialog. Measured on Antigravity: while it waits,
+`Cancel (Ctrl+D)` is gone and `Send message` has not come back, so both rules
+fail and the answer is UNKNOWN. The optional third rule only puts a name to it,
+so the reason can be shown rather than guessed at.
 """
 
 import json
@@ -28,7 +36,12 @@ PROFILES_PATH = Path(__file__).resolve().parent.parent / "profiles.json"
 
 BUSY = "busy"
 IDLE = "idle"
+WAITING = "waiting"      # stopped, but for you - a permission prompt, a question
 UNKNOWN = "unknown"
+
+# Neither of these advances a queue. The difference is only what can be said
+# about why it did not.
+STOPS = (BUSY, WAITING, UNKNOWN)
 
 # Every profile Relay ships with was measured, not guessed - see
 # tests/probes/target_text.py, which is what these strings came out of.
@@ -38,6 +51,11 @@ BUILT_IN = [
         "process": "Antigravity.exe",
         "busy": {"button": "Cancel (Ctrl+D)"},
         "idle": {"button": "Send message"},
+        # The text alone would be wrong: the request stays in the transcript
+        # after you have answered it. Pairing it with the input box still being
+        # gone is what makes it mean "right now" instead of "at some point".
+        "waiting": {"text": "Requesting permission",
+                    "absent_button": "Send message"},
     },
     {
         "name": "opencode",
@@ -129,11 +147,13 @@ def read(hwnd):
 
 
 def state(hwnd, profile=None, seen=None):
-    """BUSY, IDLE, or UNKNOWN for the agent in `hwnd`.
+    """BUSY, WAITING, IDLE or UNKNOWN for the agent in `hwnd`.
 
-    Busy is checked first on purpose. When a window somehow satisfies both -
-    a repaint caught mid-way, a profile written too loosely - the safe reading
-    is that it is still working, because that only costs a wait.
+    The order is the safety. Anything that stops a queue is checked before the
+    one thing that lets it through, so a window that somehow satisfies two
+    rules at once - a repaint caught mid-way, a profile written too loosely -
+    is read as not finished. Being wrong that way costs a wait; being wrong the
+    other way types over whatever is on screen.
     """
     profile = profile or profile_for(hwnd)
     if profile is None:
@@ -143,6 +163,8 @@ def state(hwnd, profile=None, seen=None):
 
     if _matches(profile.get("busy"), text, buttons):
         return BUSY
+    if _matches(profile.get("waiting"), text, buttons):
+        return WAITING
     if _matches(profile.get("idle"), text, buttons):
         return IDLE
     return UNKNOWN

@@ -54,8 +54,10 @@ if profile is None:
     raise SystemExit(1)
 
 print(f"profile    {profile['name']}")
-print(f"  busy when  {profile.get('busy')}")
-print(f"  idle when  {profile.get('idle')}")
+print(f"  busy when     {profile.get('busy')}")
+if profile.get("waiting"):
+    print(f"  waiting when  {profile.get('waiting')}")
+print(f"  idle when     {profile.get('idle')}")
 print("\nWatching. Ctrl+C to stop.\n")
 
 last = None
@@ -75,12 +77,19 @@ try:
         if now != last:
             held = time.time() - since
             stamp = time.strftime("%H:%M:%S")
+            # Wipe the live line first. It is written with \r and is longer
+            # than what follows, so its tail would otherwise hang off the end
+            # of the change it is reporting.
+            print("\r" + " " * 78 + "\r", end="")
             if last is not None:
                 print(f"  {stamp}  {last} -> {now}    (held {held:.1f}s)")
             else:
                 print(f"  {stamp}  starts {now}")
             # What the window actually said, so a wrong call can be traced to
             # the string that caused it rather than argued about.
+            if now == agent.WAITING:
+                print("            stopped for you, not finished - "
+                      "a queue holds here")
             if now == agent.UNKNOWN:
                 tail = [ln for ln in seen["text"].splitlines() if ln][-3:]
                 print(f"            neither rule matched. last lines: {tail}")
