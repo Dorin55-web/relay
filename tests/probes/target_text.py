@@ -178,8 +178,20 @@ def useful_lines(text):
     return [c for c in (clean(ln) for ln in text.splitlines()) if c]
 
 
+# Something this probe prints and nothing else does. If it comes back in a
+# snapshot, we read our own console.
+OWN_OUTPUT = "label this state"
+
+
 def report(shot):
     lines = useful_lines(shot["text"])
+    if OWN_OUTPUT in shot["text"]:
+        print("\n  !! this snapshot contains this probe's own output.")
+        print("     A Windows Terminal window is one handle for all its tabs,")
+        print("     and UI Automation reads whichever tab is in front - so a")
+        print("     target sharing a window with this console reads as this")
+        print("     console. Put the target in a separate terminal WINDOW")
+        print("     (Ctrl+Shift+N), not another tab.")
     print(f"\n=== {shot['label']} ===   ({shot['seconds']:.2f}s)")
     print(f"  title      {shot['title']!r}")
     print(f"  text       {len(shot['text'])} chars, {len(lines)} non-blank lines")
