@@ -34,6 +34,19 @@ from .target import window_process, window_title
 
 PROFILES_PATH = Path(__file__).resolve().parent.parent / "profiles.json"
 
+# How much of the end of a window's text a `line` rule is allowed to see.
+#
+# An app with a transcript publishes the whole conversation, and the
+# conversation is the least trustworthy thing on screen: it contains whatever
+# was said, including - measured, in the session that produced the Claude
+# profile - the very words the profile looks for. The controls that report
+# state sit at the end of the tree, below the transcript, so a rule that only
+# reads the last few lines cannot be fooled by something that was said.
+#
+# Twenty-five holds the composer and the footer under it with room to spare,
+# and is far short of the two hundred-odd lines a transcript runs to.
+TAIL_LINES = 25
+
 BUSY = "busy"
 IDLE = "idle"
 WAITING = "waiting"      # stopped, but for you - a permission prompt, a question
@@ -56,6 +69,18 @@ BUILT_IN = [
         # gone is what makes it mean "right now" instead of "at some point".
         "waiting": {"text": "Requesting permission",
                     "absent_button": "Send message"},
+    },
+    {
+        "name": "Claude",
+        "process": "claude.exe",
+        # The two states of the one button under the box you type in. Whole
+        # lines, and only from the end of the window: this app publishes the
+        # entire conversation as text, and a conversation can say anything -
+        # including, in the session these were measured in, "Claude is
+        # working" and the word "Stop". Neither is trustworthy as a fragment.
+        # As the line directly under the composer, both are.
+        "busy": {"line": "stop"},
+        "idle": {"line": "send", "absent_line": "stop"},
     },
     {
         "name": "opencode",
@@ -114,16 +139,36 @@ def profile_for(hwnd, profiles=None):
     return None
 
 
+def _tail(text):
+    """The last few lines, which is where a window keeps its controls."""
+    lines = [ln.strip().lower() for ln in text.splitlines() if ln.strip()]
+    return lines[-TAIL_LINES:]
+
+
 def _matches(rule, text, buttons):
-    """Every condition in the rule has to hold, and an empty rule never does."""
+    """Every condition in the rule has to hold, and an empty rule never does.
+
+    Four kinds of condition, in two pairs. `text` looks for a fragment
+    anywhere; `line` looks for a whole line at the end of the window. The
+    second is much the stronger of the two - a window that says `Stop` under
+    the box you type in is telling you something, and a window that merely
+    contains the word somewhere in a conversation is not.
+    """
     if not rule:
         return False
     lowered = text.lower()
+    tail = None
     for key, wanted in rule.items():
         wanted_low = wanted.lower()
+        if key in ("line", "absent_line") and tail is None:
+            tail = _tail(text)
         if key == "text" and wanted_low not in lowered:
             return False
         if key == "absent_text" and wanted_low in lowered:
+            return False
+        if key == "line" and wanted_low not in tail:
+            return False
+        if key == "absent_line" and wanted_low in tail:
             return False
         if key == "button" and not any(wanted_low == b.lower() for b in buttons):
             return False

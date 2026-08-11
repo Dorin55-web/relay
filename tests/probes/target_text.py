@@ -42,9 +42,15 @@ from relay.target import (window_class, window_pid,               # noqa: E402
 FOCUS_SECONDS = 5
 LINES_SHOWN = 30
 
-# Something this probe prints and nothing else does. If it comes back in a
-# snapshot, we read our own console.
+# Something this probe prints and nothing else does. If it comes back from a
+# terminal, we read our own console.
+#
+# Only from a terminal. Anything with a transcript can quote this text
+# perfectly innocently - pasting a run of this probe into a chat window puts
+# every word of it in that window's tree - and a warning that cries wolf on
+# the app you are actually profiling is worse than no warning.
 OWN_OUTPUT = "label this state"
+TERMINAL_CLASSES = {"CASCADIA_HOSTING_WINDOW_CLASS", "ConsoleWindowClass"}
 
 # What a window with no accessibility tree still reports: its own frame,
 # which comes from Windows rather than from the application.
@@ -65,6 +71,7 @@ def snapshot(hwnd, label):
     return {
         "label": label,
         "title": window_title(hwnd),
+        "class": window_class(hwnd),
         "text": text,
         "source": source,
         "buttons": buttons,
@@ -74,7 +81,7 @@ def snapshot(hwnd, label):
 
 def report(shot):
     lines = useful_lines(shot["text"])
-    if OWN_OUTPUT in shot["text"]:
+    if OWN_OUTPUT in shot["text"] and shot["class"] in TERMINAL_CLASSES:
         print("\n  !! this snapshot contains this probe's own output.")
         print("     A Windows Terminal window is one handle for all its tabs,")
         print("     and UI Automation reads whichever tab is in front - so a")

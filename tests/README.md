@@ -4,7 +4,7 @@
 python tests/run.py
 ```
 
-Runs all eleven suites, each in its own process, and prints a line per suite.
+Runs all twelve suites, each in its own process, and prints a line per suite.
 About a minute for the lot.
 Exit code is non-zero if any failed. To run a few:
 
@@ -30,6 +30,7 @@ the window manager, not for a mock.
 | `test_resize_guard.py` | Which border pixels start a resize and which must not, walked one pixel at a time | 5 s |
 | `test_watchdog.py` | The stall detector catching a real stall and naming the code that caused it | 10 s |
 | `test_bluetooth.py` | The hands-free mic being avoided — and, more importantly, recording still working on a machine where the headset is the only microphone | 3 s |
+| `test_agent.py` | The three profiles, against the text those applications were measured publishing — including a window that says the right words for the wrong reason. A conversation about these rules puts their own trigger words on screen, so the Claude profile matches whole lines at the end of the window rather than fragments anywhere in it | 1 s |
 | `test_chain.py` | The window in front of the queue: that the list you build is the list that gets sent, that editing a step edits only that step, and that a chain aimed at a window Relay cannot read is refused with a reason instead of starting and stalling | 1 s |
 | `test_autopilot.py` | The prompt queue refusing to advance. Almost every check asserts that nothing was sent: while the agent works, while it waits on you, while its state cannot be read, on a single flicker of idle, before it has picked the last prompt up, and into a window that would not come to the front | 5 s |
 | `test_first_open.py` | That opening the write window does not stall. Has to be its own process: the cost it guards is paid once per process, so checking for it after another suite has opened a window passes whatever the code does | 3 s |

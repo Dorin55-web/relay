@@ -15,6 +15,17 @@
       }
     },
     {
+      "name": "Claude",
+      "process": "claude.exe",
+      "busy": {
+        "line": "stop"
+      },
+      "idle": {
+        "line": "send",
+        "absent_line": "stop"
+      }
+    },
+    {
       "name": "opencode",
       "process": "WindowsTerminal.exe",
       "title_contains": "OC |",
