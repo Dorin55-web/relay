@@ -46,6 +46,11 @@ LINES_SHOWN = 30
 # snapshot, we read our own console.
 OWN_OUTPUT = "label this state"
 
+# What a window with no accessibility tree still reports: its own frame,
+# which comes from Windows rather than from the application.
+WINDOW_CHROME = {"minimise", "minimize", "maximise", "maximize", "restore",
+                 "close"}
+
 user32 = ctypes.windll.user32
 
 
@@ -76,6 +81,13 @@ def report(shot):
         print("     target sharing a window with this console reads as this")
         print("     console. Put the target in a separate terminal WINDOW")
         print("     (Ctrl+Shift+N), not another tab.")
+
+    if not lines and len(shot["buttons"]) <= len(WINDOW_CHROME):
+        print("\n  !! nothing but the window frame came back.")
+        print("     Chromium builds its accessibility tree only once something")
+        print("     asks for it, and this request is what asked - so a cold")
+        print("     window reads as empty and the next read is fine. This is")
+        print("     not a state: take this one again.")
 
     print(f"\n=== {shot['label']} ===   ({shot['seconds']:.2f}s)")
     print(f"  title      {shot['title']!r}")
