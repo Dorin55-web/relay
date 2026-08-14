@@ -115,6 +115,42 @@ for win, name in ((compose, "write"), (editor, "editor")):
     check(f"{name}: just inside the margin does nothing",
           not win._resize_edges_at(inside))
 
+print("\n--- a window has a visible edge, all the way round ---")
+# Reported as "the top border is missing". It was not missing: it was drawn in
+# the same grey as the panels inside, one pixel of #252a33 against a #141414
+# desktop, and the top edge has no content beside it to imply where the window
+# ends. This checks the edge is painted and that it is not the inside grey.
+from relay.window import EDGE                        # noqa: E402
+from relay.prompt_editor import BG, LINE             # noqa: E402
+
+check("the edge is its own colour", EDGE not in (BG, LINE), f"{EDGE}")
+
+editor.resize(700, 500)
+editor.show()
+app.processEvents()
+image = editor.grab().toImage()
+ratio = image.width() / editor.width()
+mid_x, mid_y = image.width() // 2, image.height() // 2
+edges = {
+    "top": image.pixelColor(mid_x, 0).name(),
+    "bottom": image.pixelColor(mid_x, image.height() - 1).name(),
+    "left": image.pixelColor(0, mid_y).name(),
+    "right": image.pixelColor(image.width() - 1, mid_y).name(),
+}
+for side, colour in edges.items():
+    check(f"the {side} edge is drawn", colour.lower() == EDGE.lower(), colour)
+
+# window.py exists because this chrome was written twice and the copies
+# drifted. Four windows wear it now, and one left behind is one that looks
+# like a different program.
+print("\n--- and all four wear the same one ---")
+from relay.chain import ChainWindow                  # noqa: E402
+from relay.look_picker import LookPicker             # noqa: E402
+
+for window_class in (Compose, PromptEditor, LookPicker, ChainWindow):
+    check(f"{window_class.__name__}", window_class.border_colour == EDGE,
+          window_class.border_colour)
+
 compose.close()
 editor.close()
 app.processEvents()

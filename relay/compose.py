@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from .prompt_editor import BG, LINE, MUTED, PANEL, TEXT
-from .window import FramelessWindow, TitleBar
+from .window import EDGE, FramelessWindow, TitleBar
 
 # Long enough that a normal typing rhythm does not trigger a translation on
 # every keystroke, short enough that pausing to think produces one.
@@ -47,7 +47,7 @@ STYLESHEET = f"""
 QWidget {{ background: {BG}; color: {TEXT}; font-size: 13px; }}
 QWidget#shell {{
     background: {BG};
-    border: 1px solid {LINE};
+    border: 1px solid {EDGE};
     border-radius: 8px;
 }}
 QLabel#field {{ color: {MUTED}; font-size: 11px; letter-spacing: 1px; }}
@@ -87,7 +87,7 @@ class _Bridge(QObject):
 
 
 class Compose(FramelessWindow):
-    border_colour = LINE
+    border_colour = EDGE
 
     def __init__(self, translator, on_paste, target_getter=None):
         super().__init__("Relay - Write")

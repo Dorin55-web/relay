@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
                                QVBoxLayout)
 
 from . import prompts as prompts_mod
-from .window import FramelessWindow, TitleBar
+from .window import EDGE, FramelessWindow, TitleBar
 
 # The orb's palette, so the two read as one program.
 BG = "#0e1015"
@@ -38,7 +38,7 @@ QWidget {{
 }}
 QWidget#shell {{
     background: {BG};
-    border: 1px solid {LINE};
+    border: 1px solid {EDGE};
     border-radius: 8px;
 }}
 QLabel#title {{ color: {MUTED}; font-size: 12px; }}
@@ -94,7 +94,7 @@ _window = None
 
 
 class PromptEditor(FramelessWindow):
-    border_colour = LINE
+    border_colour = EDGE
 
     def __init__(self):
         super().__init__("Relay - Prompts")

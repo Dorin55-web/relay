@@ -19,6 +19,17 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 RESIZE_MARGIN = 6        # grab strip around the frameless edge
 TITLE_HEIGHT = 38
 
+# Where a window stops.
+#
+# This used to be the same grey the panels and text boxes are outlined in,
+# which is right for a line between two things that are both lit and wrong for
+# the one line with the desktop on the other side of it. Measured on screen:
+# one physical pixel of #252a33 against a #141414 wallpaper, which is a
+# difference you can find if you know it is there and not otherwise. The top
+# edge suffers most, having no content alongside it to imply where the window
+# ends - it was reported as missing, and it was not missing, it was invisible.
+EDGE = "#3d4451"
+
 # Windows 11 rounds ordinary windows by itself, but a frameless Qt window is a
 # WS_POPUP and DWM leaves those square. The stylesheet's border-radius only
 # rounds the painted background, not the window, so the corner has to be asked
@@ -89,7 +100,7 @@ class FramelessWindow(QWidget):
     contents with a TitleBar as the first row.
     """
 
-    border_colour = "#2f3542"
+    border_colour = EDGE
 
     def __init__(self, title):
         super().__init__()

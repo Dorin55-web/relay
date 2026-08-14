@@ -28,7 +28,7 @@ from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING, STARTING,
                         STOPPED)
 from .look_picker import BG, LINE, MUTED, PANEL, STYLESHEET, TEXT
 from .target import window_title
-from .window import FramelessWindow, TitleBar
+from .window import EDGE, FramelessWindow, TitleBar
 
 _window = None
 
@@ -46,7 +46,7 @@ PHRASES = {
 
 
 class ChainWindow(FramelessWindow):
-    border_colour = LINE
+    border_colour = EDGE
 
     # The queue runs on its own thread. Qt marshals a signal onto the thread
     # that owns the receiver, which is the only reason it is safe for that

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QButtonGroup, QGridLayout, QHBoxLayout, QLabel,
 from . import orbs
 from .config import SLOT_LABELS, ORB_SLOTS, normalise_orb, save_orb
 from .overlay import paint_look
-from .window import FramelessWindow, TitleBar
+from .window import EDGE, FramelessWindow, TitleBar
 
 # The orb's palette, so the two read as one program.
 BG = "#0e1015"
@@ -97,7 +97,7 @@ class LookTile(QWidget):
 
 
 class LookPicker(FramelessWindow):
-    border_colour = LINE
+    border_colour = EDGE
 
     def __init__(self, settings, on_change):
         super().__init__("Relay - Orb")
@@ -362,7 +362,7 @@ QWidget {{
 }}
 QWidget#shell {{
     background: {BG};
-    border: 1px solid {LINE};
+    border: 1px solid {EDGE};
     border-radius: 8px;
 }}
 QLabel#title {{ color: {MUTED}; font-size: 12px; }}
