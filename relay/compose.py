@@ -292,18 +292,40 @@ class Compose(FramelessWindow):
             return
         super().keyPressEvent(event)
 
+    def _reset(self):
+        """Empty both boxes and forget anything still in flight.
+
+        Bumping _pending is the part that is not obvious: a translation
+        started before the close is still running on its thread, and without a
+        newer request id to compare against it would come back and fill a box
+        that had just been cleared.
+        """
+        self._pending += 1
+        self._english = ""
+        self.source.blockSignals(True)   # or _on_typed clears the box twice
+        self.source.setPlainText("")
+        self.source.blockSignals(False)
+        self.output.setPlainText("")
+        self.status.setText("")
+        self._set_ready(False)
+
     def closeEvent(self, event):
-        # Kept, not dropped: rebuilding costs 700ms and this window is now
-        # made once per session. Its timers stop while it is out of sight.
+        # The window is kept, not dropped: rebuilding costs 700ms and it is
+        # made once per session. What it was holding is not kept - closing it
+        # is how you are done with a piece of text, and finding the last one
+        # still sitting there next time is not a feature.
         self._debounce.stop()
         self._target_timer.stop()
+        self._reset()
         super().closeEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)
-        # A reopened window starts polling again, and starts clean.
+        # A reopened window starts polling again. It is already empty: the
+        # close cleared it, which is the only way in here.
         self._target_timer.start(TARGET_POLL_MS)
         self._refresh_target()
+        self.source.setFocus()
 
 
 def prebuild(translator, on_paste, target_getter=None):

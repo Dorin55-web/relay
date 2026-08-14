@@ -168,5 +168,43 @@ check("same window returned", a is b)
 a.close()
 app.processEvents()
 
+print("\n--- closing it empties it ---")
+# The window is kept between uses, so without this the last thing you wrote
+# is still sitting there the next time you open it.
+win = open_compose(tr, sent.append, lambda: "Claude")
+win.source.setPlainText("masinile au recunoastere de semne")
+win._debounce.stop()
+win._translate_now()
+for _ in range(60):
+    app.processEvents()
+    if win.output.toPlainText().strip():
+        break
+    time.sleep(0.05)
+check("there is something to lose", win.output.toPlainText().strip())
+
+win.close()
+app.processEvents()
+check("the Romanian went", win.source.toPlainText() == "", repr(win.source.toPlainText()))
+check("the English went", win.output.toPlainText() == "", repr(win.output.toPlainText()))
+check("the status went", win.status.text() == "", repr(win.status.text()))
+check("and nothing can be sent from an empty window", not win.paste_btn.isEnabled())
+
+win = open_compose(tr, sent.append, lambda: "Claude")
+app.processEvents()
+check("still empty when reopened", win.source.toPlainText() == "")
+
+print("\n--- a translation still in flight cannot refill it ---")
+# Closing mid-translation used to leave the result arriving into a cleared
+# box a moment later.
+win.source.setPlainText("ceva ce se traduce chiar acum")
+win._debounce.stop()
+win._translate_now()
+win.close()
+for _ in range(40):
+    app.processEvents()
+    time.sleep(0.05)
+check("the late result was dropped", win.output.toPlainText() == "",
+      repr(win.output.toPlainText()))
+
 print("\n" + ("ALL PASS" if not fails else f"FAILED: {fails}"))
 sys.exit(1 if fails else 0)
