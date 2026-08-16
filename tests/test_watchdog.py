@@ -94,5 +94,21 @@ print(f"    {summary}")
 check("summary reports what it saw", "stall" in summary)
 
 dog.stop()
+
+print("\n--- it says so even when nothing is wrong ---")
+# An idle session writes nothing at all, so a log that simply stops leaves the
+# moment it stopped bounded only by whenever the last thing happened. That is
+# how an application vanishing one evening ended up undatable to the minute.
+from relay.watchdog import Watchdog  # noqa: E402
+
+beats = []
+quiet = Watchdog(on_report=beats.append, heartbeat_seconds=0.2).start()
+time.sleep(0.75)
+quiet.stop()
+alive = [b for b in beats if b.startswith("[alive]")]
+check("it beat while nothing happened", len(alive) >= 2, f"{len(alive)} beats")
+check("and each one carries the worst gap since the last",
+      all("ms" in b for b in alive), str(alive[:2]))
+
 print("\n" + ("ALL PASS" if not fails else f"FAILED: {fails}"))
 sys.exit(1 if fails else 0)

@@ -23,10 +23,21 @@ REPORT_MS = 250
 # Never write two reports for the same stall, or one freeze fills the log.
 QUIET_SECONDS = 2.0
 
+# How often to say nothing is wrong.
+#
+# An idle session writes nothing at all, so a log that simply stops tells you
+# only that the last thing happened before whatever came next - which, when the
+# application vanished without a trace, left the moment of death bounded by
+# hours. One line every few minutes bounds it by minutes, and carries the worst
+# stall since the last one, so a session's responsiveness can be read back
+# afterwards rather than only watched live.
+HEARTBEAT_SECONDS = 300
+
 
 class Watchdog:
-    def __init__(self, on_report=print):
+    def __init__(self, on_report=print, heartbeat_seconds=HEARTBEAT_SECONDS):
         self.on_report = on_report
+        self.heartbeat_seconds = heartbeat_seconds
         self.worst_ms = 0.0
         self.stalls = 0
         self._stop = threading.Event()
@@ -47,11 +58,26 @@ class Watchdog:
 
     def _run(self):
         last = time.perf_counter()
+        beat_at = last
+        worst_since_beat = 0.0
         while not self._stop.is_set():
             time.sleep(TICK_MS / 1000.0)
             now = time.perf_counter()
             gap = (now - last) * 1000.0
             last = now
+            worst_since_beat = max(worst_since_beat, gap)
+
+            if now - beat_at >= self.heartbeat_seconds:
+                beat_at = now
+                try:
+                    self.on_report(
+                        f"[alive] worst gap in the last "
+                        f"{self.heartbeat_seconds // 60} minutes: "
+                        f"{worst_since_beat:.0f}ms")
+                except Exception:
+                    pass
+                worst_since_beat = 0.0
+
             if gap <= REPORT_MS:
                 continue
             self.stalls += 1

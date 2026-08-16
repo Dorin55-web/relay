@@ -8,6 +8,7 @@ __pycache__/
 
 # Runtime state, regenerated on every run
 relay.log
+relay.previous.log
 .orb_position.json
 
 # Editor and OS noise
