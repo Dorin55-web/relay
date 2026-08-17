@@ -109,11 +109,50 @@ QTimer.singleShot(900, app.quit)
 app.exec()
 check("event loop outlived a dialog closing", reached == ["still alive"])
 
+print("\n--- it notices its own drawing having stopped ---")
+# The dot froze once with everything else healthy: the process was up, the
+# event loop answered messages, the target tracker kept logging, and the same
+# frame sat on screen. Frames asked for and frames drawn are counted apart,
+# because a timer that stopped and a window that stopped being repainted look
+# identical from outside and need different answers.
+import builtins  # noqa: E402
+import relay.overlay as overlay_mod  # noqa: E402
+
+said = []
+real_print = builtins.print
+overlay_mod.print = said.append
+
+orb._seen = (0, 0)
+orb._frame, orb._painted = overlay_mod.FREEZE_TICKS + 5, 0
+orb._check_moving()
+check("a stalled repaint is reported",
+      any("stopped being repainted" in s for s in said), str(said))
+check("and it tries to bring the window back", orb._revivals == 1)
+
+said.clear()
+orb._seen = (0, 0)
+orb._frame, orb._painted = 40, 40
+orb._check_moving()
+check("a moving dot says nothing", not said, str(said))
+check("and is not revived", orb._revivals == 1)
+
+said.clear()
+orb._seen = (100, 100)
+orb._frame, orb._painted = 100, 100
+orb._check_moving()
+check("a timer that missed the interval is named",
+      any("timer missed" in s for s in said), str(said))
+
+del overlay_mod.print          # back to the built-in
+assert real_print is builtins.print
+
 print("\n--- quitting still works on purpose ---")
 check("timer running before quit", orb._timer.isActive())
+check("and so is the one watching it", orb._watch.isActive())
 orb.quit()
 check("on_quit fired", quit_calls == [True])
 check("timer stopped", not orb._timer.isActive())
+check("watcher stopped too", not orb._watch.isActive())
 
 print("\n" + ("ALL PASS" if not fails else f"FAILED: {fails}"))
 sys.exit(1 if fails else 0)

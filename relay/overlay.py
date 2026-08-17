@@ -89,6 +89,17 @@ TOOLTIP_REST_MS = 3500
 # How much louder speech hurries the look along, at full level.
 VOICE_URGENCY = 0.6
 
+# How often to check that the drawing is still moving, and how long it has to
+# have been still before that counts as stuck.
+#
+# The dot froze once while everything else carried on: the process was healthy,
+# the event loop answered messages, the target tracker kept logging, and the
+# same 338 pixels sat on screen for as long as anyone watched. From outside
+# there is no telling whether the timer stopped firing or whether it fired and
+# the window was never repainted - so the orb counts both, and says which.
+FREEZE_CHECK_MS = 2000
+FREEZE_TICKS = 20        # about two thirds of a second's worth of frames
+
 # The level is smoothed asymmetrically: quick to follow a syllable starting,
 # slow to let go, so the orb rides speech instead of flickering with it.
 LEVEL_ATTACK = 0.35
@@ -289,6 +300,11 @@ class Orb(QWidget):
         self.state = "idle"
         self.level_getter = lambda: 0.0
         self._frame = 0
+        # Frames asked for, and frames actually drawn. Kept apart on purpose:
+        # see _check_moving.
+        self._painted = 0
+        self._seen = (0, 0)
+        self._revivals = 0
         self._press_global = None
         self._press_origin = None
         self._level = 0.0
@@ -324,6 +340,10 @@ class Orb(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(FRAME_MS)
+
+        self._watch = QTimer(self)
+        self._watch.timeout.connect(self._check_moving)
+        self._watch.start(FREEZE_CHECK_MS)
 
     # --- menu -------------------------------------------------------------
 
@@ -644,6 +664,42 @@ class Orb(QWidget):
             )
         self.update()
 
+    def _check_moving(self):
+        """Notice the drawing having stopped, say which way, and try to revive it.
+
+        Two counters, because there are two ways to stand still and they need
+        different words:
+
+          the timer stopped firing      - _frame is not moving either
+          the window stopped repainting - _frame moves and _painted does not
+
+        The second is the one that happened. A translucent, always-on-top
+        window is composited by DWM, and after the machine has been through
+        standby it can keep answering messages and running timers while
+        nothing it draws ever reaches the screen again. Hiding and showing it
+        makes Windows take the window back, and costs nothing when it works -
+        the dot does not accept focus, so nothing is stolen from what you were
+        typing in.
+        """
+        frames, paints = self._frame, self._painted
+        ticked = frames - self._seen[0]
+        painted = paints - self._seen[1]
+        self._seen = (frames, paints)
+
+        if ticked >= FREEZE_TICKS and painted == 0:
+            self._revivals += 1
+            print(f"[orb] {ticked} frames with nothing drawn - the window has "
+                  f"stopped being repainted; showing it again "
+                  f"(revival {self._revivals})")
+            self.hide()
+            self.show()
+            _make_non_activating(self)
+            self.update()
+        elif ticked == 0:
+            # Nothing to do about it here - a timer that is not firing will not
+            # fire this either, so this only ever prints on the way back.
+            print("[orb] the animation timer missed a whole check interval")
+
     def _rate(self, look):
         """How fast a look's clock runs: its own tuning, the dial, the voice.
 
@@ -666,6 +722,7 @@ class Orb(QWidget):
     # --- painting ---------------------------------------------------------
 
     def paintEvent(self, event):
+        self._painted += 1
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         cx, cy = self._centre()
@@ -708,5 +765,6 @@ class Orb(QWidget):
         except Exception:
             pass
         self._timer.stop()
+        self._watch.stop()
         self.close()
         self.app.quit()
