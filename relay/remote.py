@@ -65,6 +65,22 @@ BAD_LINES = 6
 # How many of a batch's prompts to list on the card before summarising the
 # rest. More than a few and the state line is pushed off a phone screen.
 CARD_PROMPTS = 4
+CARD_PROMPT_CHARS = 160
+
+# The icon is the part read first and from furthest away. One per state, and
+# none of them reused, so a glance at the notification is already an answer.
+ICON_WORKING = "⏳"
+ICON_SENDING = "✍️"
+ICON_NEEDS_YOU = "🔔"
+ICON_DONE = "✅"
+ICON_TROUBLE = "⚠️"
+ICON_STOPPED = "⛔"
+
+
+def _esc(text):
+    """Telegram parses the card as HTML, so the text inside it cannot be."""
+    return (str(text).replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
 
 # Words that mean a step did not do what it was asked. Kept deliberately short:
 # every addition is another way for an ordinary sentence to be flagged, and a
@@ -254,12 +270,11 @@ class Remote:
         # whatever you last clicked into, which is what everything else does.
         self.chosen = None
         self.translate = translate
-        # The one message a batch of prompts lives in. See _render.
-        self._card = None
-        self._painted = None
-        self._state = ""
-        self._summary = ""
-        self._prompts = []
+        # The one message a batch of prompts lives in. Set up in one place
+        # rather than two: the first version listed these fields here as well
+        # as in _new_card, and adding one to a card layout left the other
+        # behind.
+        self._new_card()
         # Whether the card on screen belongs to a batch still being built
         # or run. Once a chain has finished, the next prompt starts a new
         # card rather than reopening a closed one.
@@ -292,9 +307,10 @@ class Remote:
         if not self.chat_id:
             return None
         try:
-            result = self.api(self.settings["token"], "sendMessage",
-                              {"chat_id": self.chat_id, "text": text[:3900]},
-                              timeout=20)
+            result = self.api(
+                self.settings["token"], "sendMessage",
+                {"chat_id": self.chat_id, "text": text[:3900],
+                 "parse_mode": "HTML"}, timeout=20)
             return (result or {}).get("message_id")
         except Exception as exc:
             self.log(f"[remote] could not reply: {exc}")
@@ -305,9 +321,10 @@ class Remote:
         if not self.chat_id or not message_id:
             return False
         try:
-            self.api(self.settings["token"], "editMessageText",
-                     {"chat_id": self.chat_id, "message_id": message_id,
-                      "text": text[:3900]}, timeout=20)
+            self.api(
+                self.settings["token"], "editMessageText",
+                {"chat_id": self.chat_id, "message_id": message_id,
+                 "text": text[:3900], "parse_mode": "HTML"}, timeout=20)
             return True
         except Exception as exc:
             self.log(f"[remote] could not edit: {exc}")
@@ -318,30 +335,59 @@ class Remote:
     def _render(self):
         """The card as it should currently read.
 
-        One message that changes rather than four that arrive: the prompt, a
-        line saying where it is up to, and the summary once there is one. A
-        phone showing a running commentary of its own bookkeeping is a phone
-        you stop reading.
+        One message that changes rather than four that arrive, and always the
+        same shape, so the eye lands in the same place every time:
+
+            an icon and one line saying how it went
+            what was asked
+            what went wrong, if anything
+            what it said
+
+        The verdict goes first because it is the question being asked - did
+        that work - and a phone is read at a glance. Anything that looks like a
+        failure comes above the output rather than inside it: an error twenty
+        lines up is the answer even when the last line reads calmly.
         """
+        blocks = [f"{self._icon} <b>{_esc(self._head)}</b>" if self._head else ""]
+
         shown = list(self._prompts[:CARD_PROMPTS])
         if len(self._prompts) > CARD_PROMPTS:
             shown.append(f"...and {len(self._prompts) - CARD_PROMPTS} more")
-        # Blocks joined by a blank line, rather than lines with blanks pushed
-        # between them: a card with no prompts on it yet was starting with an
-        # empty line.
-        blocks = [b for b in ("\n".join(shown), self._state, self._summary) if b]
-        return "\n\n".join(blocks)
+        if shown:
+            blocks.append("<b>Asked</b>\n"
+                          + "\n".join(_esc(p[:CARD_PROMPT_CHARS]) for p in shown))
 
-    def _paint(self, state=None, summary=None):
+        if self._bad:
+            word = "problem" if len(self._bad) == 1 else "problems"
+            blocks.append(f"⚠️ <b>{len(self._bad)} {word}</b>\n"
+                          + "\n".join(_esc(ln[:180]) for ln in self._bad))
+
+        if self._tail:
+            blocks.append("<b>What it said</b>\n"
+                          + "\n".join(_esc(ln[:180]) for ln in self._tail))
+
+        if self._note:
+            blocks.append(_esc(self._note))
+
+        return "\n\n".join(b for b in blocks if b)
+
+    def _paint(self, icon=None, head=None, bad=None, tail=None, note=None):
         """Show the card, creating it the first time and editing it after.
 
         Only when what it would say has changed. The queue reports its phase
         every second, and Telegram counts every edit against a rate limit.
         """
-        if state is not None:
-            self._state = state
-        if summary is not None:
-            self._summary = summary
+        if icon is not None:
+            self._icon = icon
+        if head is not None:
+            self._head = head
+        if bad is not None:
+            self._bad = bad
+        if tail is not None:
+            self._tail = tail
+        if note is not None:
+            self._note = note
+
         text = self._render()
         if text == self._painted:
             return
@@ -356,9 +402,12 @@ class Remote:
     def _new_card(self):
         self._card = None
         self._painted = None
-        self._state = ""
-        self._summary = ""
+        self._icon = ICON_WORKING
+        self._head = ""
         self._prompts = []
+        self._bad = []
+        self._tail = []
+        self._note = ""
 
     # --- the loop --------------------------------------------------------
 
@@ -426,7 +475,7 @@ class Remote:
         # Seeing it is the only chance to /stop a sentence the model mangled
         # before it lands in an agent.
         self._prompts.append(prompt)
-        self._paint(state="waiting for a free window")
+        self._paint(icon=ICON_WORKING, head="waiting for a free window")
 
     def _to_english(self, text):
         """Romanian in, English out - the same model the write window uses.
@@ -578,12 +627,13 @@ class Remote:
         if not self.pilot.start(steps, hwnd):
             self.pending.clear()
             self.pending_own_card = False
-            self._paint(state="could not start", summary=self._describe())
+            self._paint(icon=ICON_STOPPED, head="could not start",
+                        note=self._describe())
             return
         self.pending.clear()
         self._said_waiting = False
         self._where = window_title(hwnd)
-        self._paint(state=f"{self._where} - sending")
+        self._paint(icon=ICON_SENDING, head=f"{self._where} - sending")
 
     def _step_of(self, index, total):
         return "" if total == 1 else f"step {index + 1} of {total} - "
@@ -599,19 +649,11 @@ class Remote:
         """
         lines = [ln for ln in new_lines if len(ln) > 1 and not _is_chrome(ln)]
         if not lines:
-            self._paint(summary="Nothing new appeared in the window - it may "
-                                "have answered somewhere this cannot see.")
+            self._paint(note="Nothing new appeared in the window - it may have "
+                             "answered somewhere this cannot see.")
             return
-
-        bad = [ln for ln in lines if _looks_wrong(ln)][:BAD_LINES]
-        out = []
-        if bad:
-            out.append(f"Worth a look ({len(bad)}):")
-            out.extend(f"  {ln[:180]}" for ln in bad)
-            out.append("")
-        out.append("It ended with:")
-        out.extend(f"  {ln[:180]}" for ln in lines[-RESULT_LINES:])
-        self._paint(summary="\n".join(out))
+        self._paint(bad=[ln for ln in lines if _looks_wrong(ln)][:BAD_LINES],
+                    tail=lines[-RESULT_LINES:])
 
     def _progress(self, phase, index, total, seconds_left):
         """Called from the queue's thread, once a second. Rewrites the card.
@@ -622,20 +664,27 @@ class Remote:
         """
         where = self._step_of(index, total) + (self._where or "")
         if phase == WAITING:
-            self._paint(state=f"{where} - stopped to ask you something. "
-                              f"Nothing more goes out until you answer.")
             self._said_waiting = True
+            self._paint(icon=ICON_NEEDS_YOU,
+                        head=f"{where} needs you",
+                        note="It has stopped to ask you something. Nothing "
+                             "more goes out until you answer it.")
         elif phase == COUNTING:
-            self._paint(state=f"{where} - sending in {seconds_left}s")
+            self._paint(icon=ICON_SENDING, head=f"{where} - sending in "
+                                                f"{seconds_left}s")
         elif phase in (SENDING, STARTING):
-            self._paint(state=f"{where} - sending")
+            self._paint(icon=ICON_SENDING, head=f"{where} - sending")
         elif phase == HOLDING:
-            self._paint(state=f"{where} - working")
+            self._paint(icon=ICON_WORKING, head=f"{where} - working")
         elif phase == DONE:
             self.pending_own_card = False
-            self._paint(state=f"{self._where or 'done'} - done")
+            # The icon carries the verdict, so a notification answers the
+            # question before the message is even opened.
+            self._paint(icon=ICON_TROUBLE if self._bad else ICON_DONE,
+                        head=f"{self._where or 'Done'} - "
+                             + ("done, with something to look at"
+                                if self._bad else "done"))
         elif phase == STOPPED:
             self.pending_own_card = False
-            self._paint(state=f"{where} - stopped"
-                              + (f": {self.pilot.reason}" if self.pilot.reason
-                                 else ""))
+            self._paint(icon=ICON_STOPPED, head=f"{where} - stopped",
+                        note=self.pilot.reason or "")

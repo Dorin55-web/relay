@@ -271,6 +271,8 @@ check("all three went, in order", sent == ["first", "second", "third"], str(sent
 check("still one message for the batch", len(api.sent) == 1, str(api.sent))
 check("rewritten as it went", len(api.edits) >= 2, str(len(api.edits)))
 check("and it ends up saying done", "done" in api.card, api.card)
+check("with the icon that says so at the front",
+      api.card.startswith(remote_mod.ICON_DONE), api.card[:20])
 
 
 print("\n--- commands ---")
@@ -366,7 +368,7 @@ bot._result(0, [
 ])
 summary = api.card
 check("the failure is lifted out",
-      "Worth a look" in summary and "ModuleNotFoundError" in summary, summary)
+      "1 problem" in summary and "ModuleNotFoundError" in summary, summary)
 check("the tail is there too", "all three tests pass" in summary, summary)
 check("and the buttons are not",
       "Copy message" not in summary and "Show message actions" not in summary,
@@ -375,9 +377,10 @@ check("and the buttons are not",
 bot, api, sent, _ = make()
 bot._result(1, ["Everything went fine", "Nothing to report"])
 check("a clean step says nothing about trouble",
-      "Worth a look" not in api.card, api.card)
+      "problem" not in api.card, api.card)
 check("but does say what it ended with",
-      "Nothing to report" in api.card, api.card)
+      "What it said" in api.card and "Nothing to report" in api.card,
+      api.card)
 
 bot, api, sent, _ = make()
 bot._result(2, [])
@@ -394,6 +397,8 @@ bot._where = "Claude"
 bot._progress(remote_mod.WAITING, 0, 2, None)
 bot._progress(remote_mod.WAITING, 0, 2, None)
 check("the card says it", "stopped to ask you something" in api.card, api.card)
+check("and its own icon",
+      api.card.startswith(remote_mod.ICON_NEEDS_YOU), api.card[:20])
 # The queue reports its phase every second for as long as it lasts, and every
 # edit counts against a rate limit at Telegram's end.
 check("and saying it twice costs nothing",

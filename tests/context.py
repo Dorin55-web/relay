@@ -21,6 +21,16 @@ PROJECT = Path(__file__).resolve().parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
+# A failure is printed with the value that caused it, and those values come
+# from windows, from other people's applications, and from messages meant for
+# a phone. Any of them can hold an emoji or a diacritic the console cannot
+# encode - and then the suite dies inside print() rather than reporting.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 _isolated = None
 
 

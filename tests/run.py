@@ -45,6 +45,12 @@ def run(path):
     try:
         done = subprocess.run(
             [sys.executable, str(path)], capture_output=True, text=True,
+            # Named, not left to the console default. A suite prints the value
+            # that failed, those values come from other people's windows and
+            # from messages meant for a phone, and one emoji in a cp1252 pipe
+            # takes the whole run down with a decoding error rather than a
+            # failure report.
+            encoding="utf-8", errors="replace",
             timeout=TIMEOUT_SECONDS, cwd=str(HERE),
         )
         return done.returncode, done.stdout + done.stderr, time.perf_counter() - started
