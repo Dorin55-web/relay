@@ -85,6 +85,9 @@ class VoicePrompt:
         # Watches for the stretches where nothing Python can run. Costs a
         # wake-up every 50ms and says nothing unless something goes wrong.
         self.watchdog = Watchdog()
+        # The phone, when there is a token to use. None otherwise, and
+        # nothing about it is imported or started.
+        self.remote = None
 
     # --- hotkey handling -------------------------------------------------
 
@@ -465,6 +468,34 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not open the chain window: {exc}")
 
+    def _start_remote(self):
+        """Start the phone side, if a token has been put in telegram.json.
+
+        Imported here rather than at the top: a machine that never fills that
+        file in should not carry the module at all, and nothing about it should
+        run on the way to the orb appearing.
+        """
+        from . import remote as remote_mod
+
+        settings = remote_mod.load_settings()
+        if settings is None:
+            if remote_mod.write_template():
+                print(f"[remote] wrote {remote_mod.SETTINGS_PATH.name}; put a "
+                      f"bot token in it to drive this from your phone")
+            return
+        try:
+            self.remote = remote_mod.Remote(
+                settings,
+                send=self._send_step,
+                # The same window everything else writes into: the one you
+                # last clicked in. Read at the moment a chain starts, not now.
+                target_getter=lambda: (
+                    self.tracker.current() if self.tracker is not None else None
+                ),
+            ).start()
+        except Exception as exc:
+            self.feedback.error(f"could not start the phone link: {exc}")
+
     def _send_step(self, text, hwnd):
         """Paste one step of a chain and submit it.
 
@@ -514,6 +545,7 @@ class VoicePrompt:
 
     def _start_threads(self):
         self.watchdog.start()
+        self._start_remote()
         if self.config.remember_target:
             from .target import TargetTracker
 
@@ -545,6 +577,8 @@ class VoicePrompt:
             audio_mod.sd._terminate()
         except Exception as exc:
             print(f"[audio] could not release the audio stack: {exc}")
+        if self.remote is not None:
+            self.remote.stop()
         self.watchdog.stop()
         print(self.watchdog.summary())
         print("Stopped.\n")

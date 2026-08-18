@@ -16,3 +16,6 @@ relay.previous.log
 .idea/
 .DS_Store
 Thumbs.db
+
+# Holds the Telegram bot token. A credential, never in the repository.
+telegram.json

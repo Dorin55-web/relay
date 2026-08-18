@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout)
 
 from . import agent
-from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING, STARTING,
-                        STOPPED)
+from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
+                        STARTING, STOPPED, WAITING)
 from .look_picker import BG, LINE, MUTED, PANEL, STYLESHEET, TEXT
 from .target import window_title
 from .window import EDGE, FramelessWindow, TitleBar
@@ -38,6 +38,7 @@ TARGET_REFRESH_MS = 1000
 
 PHRASES = {
     HOLDING: "waiting for it to finish",
+    WAITING: "it has stopped to ask you something",
     SENDING: "sending",
     STARTING: "sent - waiting for it to start",
     DONE: "chain finished",

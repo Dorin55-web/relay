@@ -53,6 +53,11 @@ START_SECONDS = 45
 STEP_TIMEOUT_SECONDS = 900
 
 HOLDING = "holding"        # waiting for the agent to be free
+# Holding, but for a nameable reason: the agent has stopped and is asking
+# you something. Worth its own phase rather than folding into HOLDING,
+# because it is the one hold that will never end on its own - and the one
+# worth telling a phone about, since nobody is in the room to see it.
+WAITING = "waiting"
 COUNTING = "counting"      # it is free; counting down before sending
 SENDING = "sending"
 STARTING = "starting"      # sent; waiting to see it picked up
@@ -208,7 +213,7 @@ class Autopilot:
                     # line a second would bury everything else in the log.
                     said = state
                     self.log(f"[auto] step {self.index + 1}: {self._why(state)}")
-            self._announce(HOLDING)
+            self._announce(WAITING if state == agent.WAITING else HOLDING)
             if time.monotonic() > deadline:
                 self.reason = (f"step {self.index + 1} was still not finished "
                                f"after {STEP_TIMEOUT_SECONDS // 60} minutes")
