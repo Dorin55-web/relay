@@ -199,6 +199,44 @@ def _matches(rule, text, buttons):
     return True
 
 
+def recognised_windows():
+    """Every window on screen that some profile knows how to read.
+
+    Needed because the target is normally the window you last clicked into,
+    and choosing one that way means being at the keyboard. From a phone in
+    another room there is nothing to click, so the list has to come to you.
+
+    Returns [(hwnd, title, profile), ...] in the order Windows hands them
+    over, which is roughly front to back.
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+
+    user32 = ctypes.windll.user32
+    callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    found = []
+    profiles = load_profiles()
+
+    def visit(hwnd, _):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            if not user32.GetWindowTextLengthW(hwnd):
+                return True
+            profile = profile_for(hwnd, profiles)
+            if profile is not None:
+                found.append((hwnd, window_title(hwnd), profile))
+        except Exception:
+            pass
+        return True
+
+    try:
+        user32.EnumWindows(callback(visit), 0)
+    except Exception as exc:
+        print(f"[agent] could not list the windows: {exc}")
+    return found
+
+
 def focus_input(hwnd, profile):
     """Put the cursor where this window is typed into, before anything types.
 

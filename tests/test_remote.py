@@ -60,13 +60,16 @@ def make(chat_id=MINE, states=None, sent=None):
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
     api = Api()
     box = sent if sent is not None else []
+    alive = {"all": True}
     bot = Remote(
         settings={"token": "t", "chat_id": chat_id, "path": path},
         send=lambda text, hwnd: (box.append(text) or True),
         target_getter=lambda: HWND,
         log=lambda *_: None,
         api=api,
+        is_window=lambda _h: alive["all"],
     )
+    bot.alive = alive
     bot.pilot.read_state = states or (lambda _h: agent.IDLE)
     bot.pilot.is_window = lambda _h: True
     bot.pilot.focus = lambda _h: True
@@ -217,6 +220,54 @@ api.sent.clear()
 bot._handle({"update_id": 3, "message": {"chat": {"id": MINE}, "text": "/wat"}})
 check("an unknown command is answered, not obeyed",
       api.sent and "only know" in api.sent[0], str(api.sent))
+
+
+print("\n--- choosing the window from the phone ---")
+# The point of the feature is not being at the laptop, and the target is
+# otherwise whatever you last clicked into - which you can only change by being
+# there. This is the command that closes that gap.
+WINDOWS = [
+    (10, "Claude", {"name": "Claude"}),
+    (20, "OC | Greeting", {"name": "opencode"}),
+]
+agent.recognised_windows = lambda: list(WINDOWS)
+
+bot, api, sent, _ = make()
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/target"}})
+listing = api.sent[-1]
+check("both windows are offered", "1. Claude" in listing and "2. OC | Greeting"
+      in listing, listing)
+check("with how each one reads", "opencode" in listing, listing)
+
+api.sent.clear()
+bot._handle({"update_id": 2,
+             "message": {"chat": {"id": MINE}, "text": "/target 2"}})
+check("the second one is pinned", bot.chosen == 20, str(bot.chosen))
+check("and it says which", "OC | Greeting" in api.sent[0], str(api.sent))
+
+api.sent.clear()
+bot._handle({"update_id": 3,
+             "message": {"chat": {"id": MINE}, "text": "/target 9"}})
+check("a number out of range changes nothing", bot.chosen == 20, str(bot.chosen))
+check("and says the range", "between 1 and 2" in api.sent[0], str(api.sent))
+
+api.sent.clear()
+bot._handle({"update_id": 4,
+             "message": {"chat": {"id": MINE}, "text": "/target 0"}})
+check("zero goes back to following your clicks", bot.chosen is None,
+      str(bot.chosen))
+
+# A pinned handle that has since closed would send every message to a window
+# that is not there.
+bot.chosen = 20
+bot.alive["all"] = False
+api.sent.clear()
+check("a closed pinned window is dropped", bot._target() == HWND,
+      str(bot._target()))
+check("and forgotten", bot.chosen is None, str(bot.chosen))
+check("with a word about it",
+      any("has closed" in s for s in api.sent), str(api.sent))
+bot.alive["all"] = True
 
 
 print("\n--- a window it cannot read ---")

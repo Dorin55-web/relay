@@ -199,12 +199,21 @@ class Remote:
     countdown, is not available to somebody in another room.
     """
 
-    def __init__(self, settings, send, target_getter, log=print, api=call_api):
+    def __init__(self, settings, send, target_getter, log=print,
+                 api=call_api, is_window=None):
         self.settings = settings
         self.target_getter = target_getter
+        # Injected for the same reason the queue injects it: whether a
+        # window still exists is a question for Windows, and a test cannot
+        # conjure a real one to ask about.
+        self.is_window = is_window or (lambda hwnd: bool(
+            __import__('ctypes').windll.user32.IsWindow(hwnd)))
         self.log = log
         self.api = api
         self.pending = deque()
+        # A window picked from the phone with /target. None means follow
+        # whatever you last clicked into, which is what everything else does.
+        self.chosen = None
         self.pilot = Autopilot(send=send, on_progress=self._progress, log=log)
         self._stop = threading.Event()
         self._thread = None
@@ -290,15 +299,19 @@ class Remote:
             return
 
         if text.startswith("/"):
-            self._command(text.split()[0].lower())
+            self._command(text)
             return
 
         self.pending.append(text)
         self.say(f"Queued. {len(self.pending)} waiting.")
 
-    def _command(self, command):
+    def _command(self, text):
+        parts = text.split()
+        command = parts[0].lower()
         if command in ("/status", "/state"):
             self.say(self._describe())
+        elif command == "/target":
+            self._target_command(parts[1] if len(parts) > 1 else None)
         elif command == "/stop":
             self.pending.clear()
             if self.pilot.running:
@@ -310,31 +323,92 @@ class Remote:
             self.say("Send text and it is typed into the window you were last "
                      "working in, once whatever is in there has finished.\n\n"
                      "/status  what it can see right now\n"
+                     "/target  choose which window to write into\n"
                      "/stop    cancel the queue")
         else:
-            self.say("I only know /status, /stop and /help.")
+            self.say("I only know /status, /target, /stop and /help.")
+
+    def _target_command(self, which):
+        """List the windows worth writing into, or pin one of them.
+
+        The point of the whole feature is not being at the laptop, and the
+        target is otherwise the window you last clicked into - which is a thing
+        you can only change by being there. So the list comes to the phone.
+        """
+        windows = agent.recognised_windows()
+        if not windows:
+            self.say("Nothing on screen that Relay knows how to read. Open "
+                     "Claude, Antigravity or opencode.")
+            return
+
+        if which is None:
+            lines = ["Which window should I write into?", ""]
+            for number, (hwnd, title, profile) in enumerate(windows, start=1):
+                mark = " (now)" if hwnd == self.chosen else ""
+                lines.append(f"{number}. {title[:48]}{mark}")
+                lines.append(f"    {profile['name']} - "
+                             f"{self._plain(agent.state(hwnd, profile))}")
+            lines.append("")
+            lines.append("Send /target 1 to pick the first, and /target 0 to go "
+                         "back to following whatever you last clicked into.")
+            self.say("\n".join(lines))
+            return
+
+        if which == "0":
+            self.chosen = None
+            self.say("Back to following the window you last clicked into.\n\n"
+                     + self._describe())
+            return
+
+        if not which.isdigit() or not 1 <= int(which) <= len(windows):
+            self.say(f"Pick a number between 1 and {len(windows)}, or 0 to "
+                     f"follow your clicks again.")
+            return
+
+        hwnd, title, profile = windows[int(which) - 1]
+        self.chosen = hwnd
+        self.say(f"Writing into {title}.\n\n" + self._describe())
+
+    @staticmethod
+    def _plain(state):
+        return {
+            agent.BUSY: "working",
+            agent.IDLE: "free",
+            agent.WAITING: "stopped, waiting for you to answer something",
+            agent.UNKNOWN: "cannot tell",
+        }.get(state, "cannot tell")
 
     def _describe(self):
         """What it can see, in the words a phone needs rather than the log's."""
         hwnd = self._target()
         if not hwnd:
-            return "No target. Click into the window you want to drive."
+            return ("No target. Send /target to choose a window, or click into "
+                    "one on the laptop.")
         title = window_title(hwnd)
         profile = agent.profile_for(hwnd)
         if profile is None:
             return (f"{title}\n\nRelay does not know how to read this one, so "
-                    f"it will not type into it.")
-        state = {
-            agent.BUSY: "working",
-            agent.IDLE: "free",
-            agent.WAITING: "stopped, waiting for you to answer something",
-            agent.UNKNOWN: "cannot tell",
-        }.get(agent.state(hwnd, profile), "cannot tell")
+                    f"it will not type into it. Send /target to choose one it "
+                    f"does.")
+        how = "pinned" if self.chosen else "following your clicks"
         queued = len(self.pending) + (1 if self.pilot.running else 0)
-        return (f"{title}\nread as {profile['name']} - {state}\n"
-                f"{queued} in the queue")
+        return (f"{title}\nread as {profile['name']} - "
+                f"{self._plain(agent.state(hwnd, profile))}\n"
+                f"{queued} in the queue, {how}")
 
     def _target(self):
+        """The pinned window if there is one, otherwise the one you last used.
+
+        A pinned window that has since been closed is worse than none: every
+        message would go to a handle that no longer exists. So it is dropped,
+        once, with a word about it.
+        """
+        if self.chosen is not None:
+            if self.is_window(self.chosen):
+                return self.chosen
+            self.chosen = None
+            self.say("The window I was pinned to has closed. Back to following "
+                     "the one you last clicked into.")
         try:
             return self.target_getter()
         except Exception:
