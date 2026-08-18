@@ -50,6 +50,12 @@ HTTP_TIMEOUT = POLL_SECONDS + 15
 RETRY_START = 2
 RETRY_MAX = 60
 
+# A bot token runs to about 46 characters. The bounds are loose enough to
+# survive Telegram changing the shape and tight enough to catch the two ways
+# a paste goes wrong: half of one, or the same one several times over.
+MIN_TOKEN = 30
+MAX_TOKEN = 80
+
 # What gets written on first run. The instructions are one line, and they say
 # where to put the token rather than showing an example of one: the first
 # version spelled out a sample token inside the file, and the sample read as
@@ -145,6 +151,19 @@ def set_token(path=None, ask=None):
         print("")
         print(f"That does not look like a bot token ({len(token)} characters, "
               f"no digits before a colon). The file is unchanged.")
+        return False
+
+    # Nothing is echoed while it is pasted, so a paste that seems not to have
+    # worked gets tried again, and again. Measured on the first real setup:
+    # 171 characters, which is the same token nearly four times over, and it
+    # was accepted without a word. A token is about 46.
+    if not MIN_TOKEN <= len(token) <= MAX_TOKEN:
+        print("")
+        print(f"That is {len(token)} characters, and a bot token is about 46.")
+        if len(token) > MAX_TOKEN:
+            print("It looks pasted more than once - which is easy to do when "
+                  "nothing appears on screen. Run this again and paste once.")
+        print("The file is unchanged.")
         return False
 
     data = dict(TEMPLATE)

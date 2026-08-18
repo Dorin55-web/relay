@@ -114,6 +114,15 @@ check("nothing pasted changes nothing",
       remote_mod.set_token(path, ask=lambda _p: "   ") is False)
 check("a half-copied paste is refused",
       remote_mod.set_token(path, ask=lambda _p: "AAGHsntS8VUE") is False)
+# The one that got through. Nothing is echoed, so a paste that looks like it
+# did not work gets repeated - measured at 171 characters, the same token
+# nearly four times, written to the file without a word of complaint.
+one = "8936943894:" + "A" * 35
+check("a token pasted four times is refused",
+      remote_mod.set_token(path, ask=lambda _p: one * 4) is False)
+check("but one on its own is fine",
+      remote_mod.set_token(path, ask=lambda _p: one) is True)
+path.write_text(json.dumps({"token": "123:ABC", "chat_id": 5}), encoding="utf-8")
 kept = json.loads(path.read_text(encoding="utf-8"))
 check("and the file is left alone by both", kept["chat_id"] == 5, str(kept))
 
