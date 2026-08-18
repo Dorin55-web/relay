@@ -106,6 +106,58 @@ def save_chat_id(settings, chat_id):
         return False
 
 
+def set_token(path=None, ask=None):
+    """Ask for the token and write it, so nobody has to edit JSON by hand.
+
+    Editing the file in Notepad means landing a cursor between two quote marks
+    that are touching. That is a fiddly thing to ask of anybody, and it is the
+    part that actually went wrong the first time this was set up.
+
+    Read without echo where the terminal allows it. A token pasted into a
+    visible console stays in the scrollback, and from there ends up in the next
+    screenshot - which is exactly how the first one came to need revoking.
+
+    Setting a token clears the paired chat. A new token is a new bot, and the
+    chat that claimed the old one has no business driving this one.
+    """
+    import getpass
+
+    path = Path(path) if path else SETTINGS_PATH
+    if ask is None:
+        def ask(prompt):
+            try:
+                return getpass.getpass(prompt)
+            except Exception:
+                return input(prompt)
+
+    print("Paste the token @BotFather gave you, then press Enter.")
+    print("It will not appear as you paste - that is deliberate.")
+    print("")
+    token = (ask("token: ") or "").strip()
+
+    if not token:
+        print("")
+        print("Nothing pasted; the file is unchanged.")
+        return False
+    # 123456789:AAE... - enough of a shape to catch a half-copied paste, not so
+    # strict that a change at Telegram's end locks anybody out.
+    if ":" not in token or not token.split(":")[0].isdigit():
+        print("")
+        print(f"That does not look like a bot token ({len(token)} characters, "
+              f"no digits before a colon). The file is unchanged.")
+        return False
+
+    data = dict(TEMPLATE)
+    data["token"] = token
+    data["chat_id"] = None
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print("")
+    print(f"Written to {path.name}. The paired chat was cleared, so the first "
+          f"message the bot receives claims it.")
+    print("Restart Relay, then message your bot.")
+    return True
+
+
 def call_api(token, method, params, timeout=HTTP_TIMEOUT):
     """One Telegram API call. Returns the result field, or raises."""
     url = API.format(token=token, method=method)

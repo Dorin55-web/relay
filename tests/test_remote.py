@@ -98,6 +98,26 @@ check("a filled one loads", loaded and loaded["token"] == "abc"
       and loaded["chat_id"] == 7, str(loaded))
 
 
+print("\n--- setting the token without editing the file by hand ---")
+tmp = Path(tempfile.mkdtemp(prefix="relay-token-"))
+path = tmp / "telegram.json"
+
+check("a token is written", remote_mod.set_token(path, ask=lambda _p: "123:ABCdef"))
+written = json.loads(path.read_text(encoding="utf-8"))
+check("and it is the one given", written["token"] == "123:ABCdef", str(written))
+# A new token means a new bot; the chat that claimed the old one has no
+# business driving this one.
+check("the pairing is cleared", written["chat_id"] is None, str(written))
+
+path.write_text(json.dumps({"token": "123:ABC", "chat_id": 5}), encoding="utf-8")
+check("nothing pasted changes nothing",
+      remote_mod.set_token(path, ask=lambda _p: "   ") is False)
+check("a half-copied paste is refused",
+      remote_mod.set_token(path, ask=lambda _p: "AAGHsntS8VUE") is False)
+kept = json.loads(path.read_text(encoding="utf-8"))
+check("and the file is left alone by both", kept["chat_id"] == 5, str(kept))
+
+
 print("\n--- the first message claims the bot ---")
 bot, api, _, path = make(chat_id=None)
 api.feed("hello", chat=MINE)

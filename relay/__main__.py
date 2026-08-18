@@ -674,6 +674,10 @@ def main(argv=None):
     parser.add_argument(
         "--write-config", action="store_true", help="write a config.json with the defaults"
     )
+    parser.add_argument(
+        "--set-token", action="store_true",
+        help="paste the Telegram bot token that lets your phone drive this"
+    )
     parser.add_argument("--check-cuda", action="store_true", help="report GPU availability and exit")
     parser.add_argument("--no-ui", action="store_true", help="hotkey only, no floating orb")
     args = parser.parse_args(argv)
@@ -684,6 +688,11 @@ def main(argv=None):
 
     if args.mic_test:
         return audio_mod.mic_test(load_config(args.config))
+
+    if args.set_token:
+        from .remote import set_token
+
+        return 0 if set_token() else 1
 
     if args.write_config:
         path = write_default_config()
