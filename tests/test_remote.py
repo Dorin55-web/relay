@@ -30,12 +30,24 @@ MINE, THEIRS = 111, 999
 
 
 class Api:
-    """Stands in for Telegram. Hands out scripted updates, records replies."""
+    """Stands in for Telegram. Scripted updates in, messages and edits out.
+
+    Edits are tracked separately from sends because the difference is the
+    point: a batch of prompts is meant to occupy one message that changes,
+    not a running commentary of four.
+    """
 
     def __init__(self):
         self.updates = []
-        self.sent = []
+        self.sent = []          # every sendMessage, in order
+        self.edits = []         # every editMessageText, in order
+        self.messages = {}      # id -> what it now says
         self.calls = 0
+
+    @property
+    def card(self):
+        """What the most recently created message currently says."""
+        return self.messages.get(len(self.sent), "")
 
     def feed(self, text, chat=MINE, update_id=None):
         self.updates.append({
@@ -50,7 +62,12 @@ class Api:
             return out
         if method == "sendMessage":
             self.sent.append(params["text"])
+            self.messages[len(self.sent)] = params["text"]
             return {"message_id": len(self.sent)}
+        if method == "editMessageText":
+            self.edits.append(params["text"])
+            self.messages[params["message_id"]] = params["text"]
+            return {}
         raise AssertionError(f"unexpected method {method}")
 
 
@@ -178,7 +195,7 @@ bot._handle({"update_id": 1, "message": {"chat": {"id": MINE},
 check("the English is what gets queued",
       list(bot.pending) == ["find the cause of the freeze"], str(bot.pending))
 check("and it is shown back on the phone",
-      "find the cause of the freeze" in api.sent[-1], str(api.sent))
+      "find the cause of the freeze" in api.card, api.card)
 
 print("\n--- unless you ask for it as typed ---")
 bot, api, sent, _ = make()
@@ -218,7 +235,8 @@ print("\n--- a message becomes a step ---")
 bot, api, sent, _ = make()
 bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "first"}})
 check("queued", list(bot.pending) == ["first"], str(bot.pending))
-check("and acknowledged", any("Queued" in s for s in api.sent), str(api.sent))
+check("and shown on a card", "first" in api.card, api.card)
+check("one message, not several", len(api.sent) == 1, str(api.sent))
 
 
 print("\n--- several in a row become one chain, in order ---")
@@ -248,8 +266,11 @@ deadline = time.monotonic() + 8
 while bot.pilot.running and time.monotonic() < deadline:
     time.sleep(0.02)
 check("all three went, in order", sent == ["first", "second", "third"], str(sent))
-check("and it reported finishing", any("All 3 done" in s for s in api.sent),
-      str(api.sent[-3:]))
+# The whole batch lived in the one message it started in. Four separate
+# notifications for one prompt is what this replaced.
+check("still one message for the batch", len(api.sent) == 1, str(api.sent))
+check("rewritten as it went", len(api.edits) >= 2, str(len(api.edits)))
+check("and it ends up saying done", "done" in api.card, api.card)
 
 
 print("\n--- commands ---")
@@ -326,7 +347,7 @@ bot._drain()
 check("nothing was sent", sent == [], str(sent))
 check("the queue was not left half full", not bot.pending, str(bot.pending))
 check("and the phone was told why",
-      any("does not know how to read" in s for s in api.sent), str(api.sent))
+      "does not know how to read" in api.card, api.card)
 agent.profile_for = was
 
 
@@ -343,34 +364,39 @@ bot._result(0, [
     "Show message actions",             # chrome
     "Done, all three tests pass",
 ])
-summary = api.sent[-1]
-check("it names the step", "Step 1 finished" in summary, summary)
+summary = api.card
 check("the failure is lifted out",
-      "Something to look at" in summary and "ModuleNotFoundError" in summary,
-      summary)
+      "Worth a look" in summary and "ModuleNotFoundError" in summary, summary)
 check("the tail is there too", "all three tests pass" in summary, summary)
 check("and the buttons are not",
       "Copy message" not in summary and "Show message actions" not in summary,
       summary)
 
-api.sent.clear()
+bot, api, sent, _ = make()
 bot._result(1, ["Everything went fine", "Nothing to report"])
-clean = api.sent[-1]
 check("a clean step says nothing about trouble",
-      "Something to look at" not in clean, clean)
+      "Worth a look" not in api.card, api.card)
+check("but does say what it ended with",
+      "Nothing to report" in api.card, api.card)
 
-api.sent.clear()
+bot, api, sent, _ = make()
 bot._result(2, [])
 check("and a step that changed nothing on screen says that",
-      "Nothing new appeared" in api.sent[-1], api.sent[-1])
+      "Nothing new appeared" in api.card, api.card)
+check("no card starts with a blank line",
+      api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
 print("\n--- it tells you when the agent stops to ask you something ---")
 # The one interruption worth making. Nobody is in the room to notice.
 bot, api, sent, _ = make()
-bot.pilot.steps = ["a", "b"]
+bot._where = "Claude"
 bot._progress(remote_mod.WAITING, 0, 2, None)
 bot._progress(remote_mod.WAITING, 0, 2, None)
-check("said once", sum("stopped to ask" in s for s in api.sent) == 1, str(api.sent))
+check("the card says it", "stopped to ask you something" in api.card, api.card)
+# The queue reports its phase every second for as long as it lasts, and every
+# edit counts against a rate limit at Telegram's end.
+check("and saying it twice costs nothing",
+      len(api.sent) + len(api.edits) == 1, f"{api.sent} {api.edits}")
 
 sys.exit(report.finish())

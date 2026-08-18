@@ -28,7 +28,8 @@ from collections import deque
 from pathlib import Path
 
 from . import agent
-from .autopilot import DONE, STOPPED, WAITING, Autopilot
+from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
+                        STARTING, STOPPED, WAITING)
 from .target import window_title
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +61,10 @@ MAX_TOKEN = 80
 # hundred lines and a phone is not the place to read one.
 RESULT_LINES = 12
 BAD_LINES = 6
+
+# How many of a batch's prompts to list on the card before summarising the
+# rest. More than a few and the state line is pushed off a phone screen.
+CARD_PROMPTS = 4
 
 # Words that mean a step did not do what it was asked. Kept deliberately short:
 # every addition is another way for an ordinary sentence to be flagged, and a
@@ -249,6 +254,17 @@ class Remote:
         # whatever you last clicked into, which is what everything else does.
         self.chosen = None
         self.translate = translate
+        # The one message a batch of prompts lives in. See _render.
+        self._card = None
+        self._painted = None
+        self._state = ""
+        self._summary = ""
+        self._prompts = []
+        # Whether the card on screen belongs to a batch still being built
+        # or run. Once a chain has finished, the next prompt starts a new
+        # card rather than reopening a closed one.
+        self.pending_own_card = False
+        self._where = ""
         self.pilot = Autopilot(send=send, on_progress=self._progress,
                                on_result=self._result, log=log)
         self._stop = threading.Event()
@@ -272,17 +288,77 @@ class Remote:
         return self.settings.get("chat_id")
 
     def say(self, text):
-        """Send a line back to the phone. Never fatal: this is commentary."""
+        """Send a message. Returns its id, so it can be edited later."""
         if not self.chat_id:
-            return False
+            return None
         try:
-            self.api(self.settings["token"], "sendMessage",
-                     {"chat_id": self.chat_id, "text": text[:3900]},
-                     timeout=20)
-            return True
+            result = self.api(self.settings["token"], "sendMessage",
+                              {"chat_id": self.chat_id, "text": text[:3900]},
+                              timeout=20)
+            return (result or {}).get("message_id")
         except Exception as exc:
             self.log(f"[remote] could not reply: {exc}")
+            return None
+
+    def edit(self, message_id, text):
+        """Rewrite a message already sent. False if it could not be done."""
+        if not self.chat_id or not message_id:
             return False
+        try:
+            self.api(self.settings["token"], "editMessageText",
+                     {"chat_id": self.chat_id, "message_id": message_id,
+                      "text": text[:3900]}, timeout=20)
+            return True
+        except Exception as exc:
+            self.log(f"[remote] could not edit: {exc}")
+            return False
+
+    # --- one message per batch, rewritten as it goes ----------------------
+
+    def _render(self):
+        """The card as it should currently read.
+
+        One message that changes rather than four that arrive: the prompt, a
+        line saying where it is up to, and the summary once there is one. A
+        phone showing a running commentary of its own bookkeeping is a phone
+        you stop reading.
+        """
+        shown = list(self._prompts[:CARD_PROMPTS])
+        if len(self._prompts) > CARD_PROMPTS:
+            shown.append(f"...and {len(self._prompts) - CARD_PROMPTS} more")
+        # Blocks joined by a blank line, rather than lines with blanks pushed
+        # between them: a card with no prompts on it yet was starting with an
+        # empty line.
+        blocks = [b for b in ("\n".join(shown), self._state, self._summary) if b]
+        return "\n\n".join(blocks)
+
+    def _paint(self, state=None, summary=None):
+        """Show the card, creating it the first time and editing it after.
+
+        Only when what it would say has changed. The queue reports its phase
+        every second, and Telegram counts every edit against a rate limit.
+        """
+        if state is not None:
+            self._state = state
+        if summary is not None:
+            self._summary = summary
+        text = self._render()
+        if text == self._painted:
+            return
+        self._painted = text
+        if self._card is None:
+            self._card = self.say(text)
+        elif not self.edit(self._card, text):
+            # The message may have been deleted from the phone. Start another
+            # rather than going quiet for the rest of the chain.
+            self._card = self.say(text)
+
+    def _new_card(self):
+        self._card = None
+        self._painted = None
+        self._state = ""
+        self._summary = ""
+        self._prompts = []
 
     # --- the loop --------------------------------------------------------
 
@@ -339,15 +415,18 @@ class Remote:
             self._command(text)
             return
 
-        prompt, english = self._to_english(text)
+        prompt, _english = self._to_english(text)
         self.pending.append(prompt)
-        if english and english != text:
-            # The translation goes back to the phone, not just into the queue.
-            # It is what will actually be typed, and seeing it is the only
-            # chance to /stop a sentence the model got wrong before it lands.
-            self.say(f"Queued, {len(self.pending)} waiting:\n\n{english}")
-        else:
-            self.say(f"Queued. {len(self.pending)} waiting.")
+        if self._card is not None and not self.pending_own_card:
+            # A card that has already reported a finished chain is closed;
+            # this prompt starts a new one.
+            self._new_card()
+        self.pending_own_card = True
+        # The prompt shown is the English, because that is what will be typed.
+        # Seeing it is the only chance to /stop a sentence the model mangled
+        # before it lands in an agent.
+        self._prompts.append(prompt)
+        self._paint(state="waiting for a free window")
 
     def _to_english(self, text):
         """Romanian in, English out - the same model the write window uses.
@@ -498,11 +577,16 @@ class Remote:
         steps = list(self.pending)
         if not self.pilot.start(steps, hwnd):
             self.pending.clear()
-            self.say("Could not start.\n\n" + self._describe())
+            self.pending_own_card = False
+            self._paint(state="could not start", summary=self._describe())
             return
         self.pending.clear()
         self._said_waiting = False
-        self.say(f"Sending {len(steps)} to {window_title(hwnd)}.")
+        self._where = window_title(hwnd)
+        self._paint(state=f"{self._where} - sending")
+
+    def _step_of(self, index, total):
+        return "" if total == 1 else f"step {index + 1} of {total} - "
 
     def _result(self, index, new_lines):
         """Send back what the window said, once a step has finished.
@@ -515,37 +599,43 @@ class Remote:
         """
         lines = [ln for ln in new_lines if len(ln) > 1 and not _is_chrome(ln)]
         if not lines:
-            self.say(f"Step {index + 1} finished. Nothing new appeared in the "
-                     f"window - which may mean it answered somewhere this "
-                     f"cannot see.")
+            self._paint(summary="Nothing new appeared in the window - it may "
+                                "have answered somewhere this cannot see.")
             return
 
         bad = [ln for ln in lines if _looks_wrong(ln)][:BAD_LINES]
-        tail = lines[-RESULT_LINES:]
-
-        out = [f"Step {index + 1} finished."]
+        out = []
         if bad:
-            out.append("")
-            out.append(f"Something to look at ({len(bad)} of them):")
+            out.append(f"Worth a look ({len(bad)}):")
             out.extend(f"  {ln[:180]}" for ln in bad)
-        out.append("")
+            out.append("")
         out.append("It ended with:")
-        out.extend(f"  {ln[:180]}" for ln in tail)
-        self.say("\n".join(out))
+        out.extend(f"  {ln[:180]}" for ln in lines[-RESULT_LINES:])
+        self._paint(summary="\n".join(out))
 
     def _progress(self, phase, index, total, seconds_left):
-        """Called from the queue's thread. Only the ends are worth a message.
+        """Called from the queue's thread, once a second. Rewrites the card.
 
-        Except one middle. An agent that has stopped to ask permission will sit
-        there until somebody answers, and the entire point of this is that you
-        are not in the room to notice.
+        _paint does nothing when the words have not changed, which is most of
+        the time: the queue reports the same phase every poll for as long as it
+        lasts, and every edit counts against a rate limit at Telegram's end.
         """
-        if phase == WAITING and not self._said_waiting:
+        where = self._step_of(index, total) + (self._where or "")
+        if phase == WAITING:
+            self._paint(state=f"{where} - stopped to ask you something. "
+                              f"Nothing more goes out until you answer.")
             self._said_waiting = True
-            self.say(f"Step {index + 1} of {total}: it has stopped to ask you "
-                     f"something. Nothing more goes out until you answer.")
+        elif phase == COUNTING:
+            self._paint(state=f"{where} - sending in {seconds_left}s")
+        elif phase in (SENDING, STARTING):
+            self._paint(state=f"{where} - sending")
+        elif phase == HOLDING:
+            self._paint(state=f"{where} - working")
         elif phase == DONE:
-            self.say(f"All {total} done.")
+            self.pending_own_card = False
+            self._paint(state=f"{self._where or 'done'} - done")
         elif phase == STOPPED:
-            self.say(f"Stopped at step {index + 1} of {total}"
-                     + (f": {self.pilot.reason}" if self.pilot.reason else "."))
+            self.pending_own_card = False
+            self._paint(state=f"{where} - stopped"
+                              + (f": {self.pilot.reason}" if self.pilot.reason
+                                 else ""))
