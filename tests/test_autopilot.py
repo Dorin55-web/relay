@@ -216,6 +216,57 @@ window.caret = None
 pilot = run(window.pilot(), ["one"], seconds=2.0)
 check("sends where there is no box to find", window.sent == ["one"], str(window.sent))
 
+print("\n--- what the window said, once a step has finished ---")
+# The answer to a step is whatever the window says afterwards and did not say
+# before. Nothing else tells one reply apart from the transcript around it.
+window = Fake(agent.IDLE, on_send=works_then_finishes)
+window.caret = True
+said = {"text": "line one\nline two\n"}
+results = []
+
+
+def read_text(_hwnd):
+    return said["text"]
+
+
+def grew(w):
+    """Behave like an agent: pick the work up, answer, go quiet."""
+    w.state = agent.BUSY
+    said["text"] += "the answer\nERROR: it went wrong\n"
+    threading.Timer(0.15, lambda: setattr(w, "state", agent.IDLE)).start()
+
+
+window.on_send = grew
+pilot = Autopilot(
+    send=window.send, read_state=window.read, is_window=lambda _h: True,
+    focus=lambda _h: True, place_caret=lambda _h, _p: True,
+    read_text=read_text, on_result=lambda i, lines: results.append((i, lines)),
+    log=lambda *_: None, **FAST)
+run(pilot, ["do a thing"], seconds=4.0)
+
+check("a result came back", len(results) == 1, str(results))
+check("for the step that produced it", results and results[0][0] == 0, str(results))
+check("only the new lines", results and results[0][1] == ["the answer",
+      "ERROR: it went wrong"], str(results))
+# Reporting done when the last step has merely been picked up would report
+# that the work was handed over, not that it finished - and the last step's
+# answer is the one most worth having.
+check("and done means done", pilot.phase == auto_mod.DONE, pilot.phase)
+
+print("\n--- and nothing is read when nobody is listening ---")
+# Reading a Chromium window costs about 110ms. A chain nobody is watching
+# should not pay it twice a step.
+reads = []
+window = Fake(agent.IDLE, on_send=works_then_finishes)
+window.caret = True
+pilot = Autopilot(
+    send=window.send, read_state=window.read, is_window=lambda _h: True,
+    focus=lambda _h: True, place_caret=lambda _h, _p: True,
+    read_text=lambda _h: reads.append(1) or "", on_result=None,
+    log=lambda *_: None, **FAST)
+run(pilot, ["do a thing"], seconds=3.0)
+check("the window was never read", reads == [], str(reads))
+
 print("\n--- refuses to start on nothing ---")
 window = Fake(agent.IDLE)
 pilot = window.pilot()

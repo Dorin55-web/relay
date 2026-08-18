@@ -330,6 +330,41 @@ check("and the phone was told why",
 agent.profile_for = was
 
 
+print("\n--- the summary that comes back after a step ---")
+# The question it answers is "did that work". An error twenty lines up is the
+# answer even when the last line looks calm, so failures are lifted out rather
+# than left to be spotted in the tail.
+bot, api, sent, _ = make()
+bot._result(0, [
+    "Reading the files now",
+    "Copy message",                     # chrome, not an answer
+    "ModuleNotFoundError: No module named 'foo'",
+    "Trying a different import",
+    "Show message actions",             # chrome
+    "Done, all three tests pass",
+])
+summary = api.sent[-1]
+check("it names the step", "Step 1 finished" in summary, summary)
+check("the failure is lifted out",
+      "Something to look at" in summary and "ModuleNotFoundError" in summary,
+      summary)
+check("the tail is there too", "all three tests pass" in summary, summary)
+check("and the buttons are not",
+      "Copy message" not in summary and "Show message actions" not in summary,
+      summary)
+
+api.sent.clear()
+bot._result(1, ["Everything went fine", "Nothing to report"])
+clean = api.sent[-1]
+check("a clean step says nothing about trouble",
+      "Something to look at" not in clean, clean)
+
+api.sent.clear()
+bot._result(2, [])
+check("and a step that changed nothing on screen says that",
+      "Nothing new appeared" in api.sent[-1], api.sent[-1])
+
+
 print("\n--- it tells you when the agent stops to ask you something ---")
 # The one interruption worth making. Nobody is in the room to notice.
 bot, api, sent, _ = make()

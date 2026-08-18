@@ -79,10 +79,15 @@ class Autopilot:
 
     def __init__(self, send, read_state=None, on_progress=None,
                  is_window=None, focus=None, place_caret=None, log=print,
+                 read_text=None, on_result=None,
                  poll_seconds=POLL_SECONDS,
                  countdown_seconds=COUNTDOWN_SECONDS, countdown_tick=1.0):
         self.send = send                       # (text, hwnd) -> bool
         self.read_state = read_state or agent.state
+        # What the window says, so a step's answer can be read back. Only
+        # called when somebody is listening for the result.
+        self.read_text = read_text or (lambda hwnd: agent.read(hwnd)["text"])
+        self.on_result = on_result             # (index, new_lines) -> None
         self.focus = focus or focus_window
         self.place_caret = place_caret or agent.focus_input
         self.is_window = is_window or (lambda hwnd: bool(
@@ -106,6 +111,10 @@ class Autopilot:
         self._thread = None
         self._stop = threading.Event()
         self._typed = threading.Event()
+        # (step index, what the window said before that step was sent). The
+        # answer to a step is whatever is there afterwards and was not there
+        # before; nothing else distinguishes it from the rest of a transcript.
+        self._before = None
 
     # --- outside world ---------------------------------------------------
 
@@ -191,9 +200,39 @@ class Autopilot:
                     return self._finish(STOPPED, self.reason or "could not send")
                 if not self._wait_until_started():
                     return self._finish(STOPPED, self.reason or "never started")
-            self._finish(DONE, f"all {len(self.steps)} step(s) sent")
+
+            # The last step has been picked up but not finished. Reporting
+            # "done" here would be reporting that the work was handed over,
+            # which is not what the word means - and the answer to the last
+            # step is the one most worth having, especially when the whole
+            # chain was one message from a phone.
+            if self._before is not None:
+                self._wait_until_free()
+            self._finish(DONE, f"all {len(self.steps)} step(s) done")
         except Exception as exc:
             self._finish(STOPPED, f"stopped on an error: {exc}")
+
+    def _report_result(self):
+        """Hand back what the window said that it had not said before.
+
+        Diffing whole lines against the snapshot taken before the step is the
+        only way to tell one answer from the transcript around it. A terminal
+        redraws a fixed screen and a chat window keeps everything, and neither
+        marks where a reply begins.
+        """
+        if self._before is None:
+            return
+        index, before = self._before
+        self._before = None
+        if self.on_result is None:
+            return
+        try:
+            was = {ln.strip() for ln in before.splitlines() if ln.strip()}
+            now = [ln.strip() for ln in self.read_text(self.hwnd).splitlines()
+                   if ln.strip()]
+            self.on_result(index, [ln for ln in now if ln not in was])
+        except Exception as exc:
+            self.log(f"[auto] could not read the result: {exc}")
 
     def _wait_until_free(self):
         """Hold until the agent has been idle for SETTLE_POLLS readings."""
@@ -205,6 +244,9 @@ class Autopilot:
             if state == agent.IDLE:
                 settled += 1
                 if settled >= SETTLE_POLLS:
+                    # Free again means whatever was sent before has finished,
+                    # so this is the moment its answer can be read.
+                    self._report_result()
                     return True
             else:
                 settled = 0
@@ -267,6 +309,16 @@ class Autopilot:
             self.reason = (f"could not put the cursor in the box to type in, "
                            f"so nothing was sent to {self.title!r}")
             return False
+
+        # Taken before the paste, so the answer can be told apart from
+        # everything already on screen. Only when somebody wants it: reading a
+        # Chromium window costs about 110ms.
+        if self.on_result is not None:
+            try:
+                self._before = (self.index, self.read_text(self.hwnd))
+            except Exception as exc:
+                self.log(f"[auto] could not read the window first: {exc}")
+                self._before = None
 
         self.log(f"[auto] step {self.index + 1}/{len(self.steps)} -> {text[:60]!r}")
         if not self.send(text, self.hwnd):

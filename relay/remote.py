@@ -56,6 +56,40 @@ RETRY_MAX = 60
 MIN_TOKEN = 30
 MAX_TOKEN = 80
 
+# How much of a finished step to send back. A transcript runs to a couple of
+# hundred lines and a phone is not the place to read one.
+RESULT_LINES = 12
+BAD_LINES = 6
+
+# Words that mean a step did not do what it was asked. Kept deliberately short:
+# every addition is another way for an ordinary sentence to be flagged, and a
+# summary that cries wolf gets skimmed and then ignored.
+TROUBLE = (
+    "error", "exception", "traceback", "failed", "failure", "cannot",
+    "could not", "denied", "not found", "no such", "fatal", "refused",
+    "eroare", "nu a reusit", "nu s-a putut",
+)
+
+# Buttons, labels and chrome that come back with the text of any window and say
+# nothing about what happened.
+CHROME = (
+    "copy message", "copy code", "read aloud", "show message actions",
+    "pin as chapter", "run in terminal", "good response", "bad response",
+    "send message", "type / for commands", "bypass permissions",
+    "dictation settings", "press and hold to record", "notifications",
+    "more options for", "collapse sidebar", "show more", "just now",
+)
+
+
+def _looks_wrong(line):
+    low = line.lower()
+    return any(word in low for word in TROUBLE)
+
+
+def _is_chrome(line):
+    low = line.strip().lower()
+    return any(low == word or low.startswith(word) for word in CHROME)
+
 # What gets written on first run. The instructions are one line, and they say
 # where to put the token rather than showing an example of one: the first
 # version spelled out a sample token inside the file, and the sample read as
@@ -215,7 +249,8 @@ class Remote:
         # whatever you last clicked into, which is what everything else does.
         self.chosen = None
         self.translate = translate
-        self.pilot = Autopilot(send=send, on_progress=self._progress, log=log)
+        self.pilot = Autopilot(send=send, on_progress=self._progress,
+                               on_result=self._result, log=log)
         self._stop = threading.Event()
         self._thread = None
         self._offset = 0
@@ -468,6 +503,35 @@ class Remote:
         self.pending.clear()
         self._said_waiting = False
         self.say(f"Sending {len(steps)} to {window_title(hwnd)}.")
+
+    def _result(self, index, new_lines):
+        """Send back what the window said, once a step has finished.
+
+        Reading the whole of it would be useless on a phone - the transcript
+        runs to two hundred lines - so this is the tail of what is new, with
+        anything that looks like a failure lifted out of it first. The question
+        being answered is "did that work", and an error twenty lines up is the
+        answer even when the last line looks calm.
+        """
+        lines = [ln for ln in new_lines if len(ln) > 1 and not _is_chrome(ln)]
+        if not lines:
+            self.say(f"Step {index + 1} finished. Nothing new appeared in the "
+                     f"window - which may mean it answered somewhere this "
+                     f"cannot see.")
+            return
+
+        bad = [ln for ln in lines if _looks_wrong(ln)][:BAD_LINES]
+        tail = lines[-RESULT_LINES:]
+
+        out = [f"Step {index + 1} finished."]
+        if bad:
+            out.append("")
+            out.append(f"Something to look at ({len(bad)} of them):")
+            out.extend(f"  {ln[:180]}" for ln in bad)
+        out.append("")
+        out.append("It ended with:")
+        out.extend(f"  {ln[:180]}" for ln in tail)
+        self.say("\n".join(out))
 
     def _progress(self, phase, index, total, seconds_left):
         """Called from the queue's thread. Only the ends are worth a message.
