@@ -102,29 +102,38 @@ print("\n--- setting the token without editing the file by hand ---")
 tmp = Path(tempfile.mkdtemp(prefix="relay-token-"))
 path = tmp / "telegram.json"
 
-check("a token is written", remote_mod.set_token(path, ask=lambda _p: "123:ABCdef"))
+# The shape of a real one: an id, a colon, and thirty-five characters.
+ONE = "8936943894:" + "A" * 35
+
+check("a token is written", remote_mod.set_token(path, ask=lambda _p: ONE))
 written = json.loads(path.read_text(encoding="utf-8"))
-check("and it is the one given", written["token"] == "123:ABCdef", str(written))
+check("and it is the one given", written["token"] == ONE, str(written))
 # A new token means a new bot; the chat that claimed the old one has no
 # business driving this one.
 check("the pairing is cleared", written["chat_id"] is None, str(written))
 
-path.write_text(json.dumps({"token": "123:ABC", "chat_id": 5}), encoding="utf-8")
+# A file with something already in it, so a refusal can be seen to leave it
+# alone rather than merely to return False.
+path.write_text(json.dumps({"token": "old:token", "chat_id": 5}), encoding="utf-8")
+
 check("nothing pasted changes nothing",
       remote_mod.set_token(path, ask=lambda _p: "   ") is False)
 check("a half-copied paste is refused",
       remote_mod.set_token(path, ask=lambda _p: "AAGHsntS8VUE") is False)
 # The one that got through. Nothing is echoed, so a paste that looks like it
-# did not work gets repeated - measured at 171 characters, the same token
-# nearly four times, written to the file without a word of complaint.
-one = "8936943894:" + "A" * 35
+# did not work gets repeated - measured at 171 characters on the first real
+# setup, the same token nearly four times, written without a word.
 check("a token pasted four times is refused",
-      remote_mod.set_token(path, ask=lambda _p: one * 4) is False)
-check("but one on its own is fine",
-      remote_mod.set_token(path, ask=lambda _p: one) is True)
-path.write_text(json.dumps({"token": "123:ABC", "chat_id": 5}), encoding="utf-8")
+      remote_mod.set_token(path, ask=lambda _p: ONE * 4) is False)
+
 kept = json.loads(path.read_text(encoding="utf-8"))
-check("and the file is left alone by both", kept["chat_id"] == 5, str(kept))
+check("and none of the three touched the file",
+      kept == {"token": "old:token", "chat_id": 5}, str(kept))
+
+check("but one pasted once goes in",
+      remote_mod.set_token(path, ask=lambda _p: ONE) is True)
+check("replacing what was there",
+      json.loads(path.read_text(encoding="utf-8"))["token"] == ONE)
 
 
 print("\n--- the first message claims the bot ---")
