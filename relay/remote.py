@@ -50,16 +50,16 @@ HTTP_TIMEOUT = POLL_SECONDS + 15
 RETRY_START = 2
 RETRY_MAX = 60
 
+# What gets written on first run. The instructions are one line, and they say
+# where to put the token rather than showing an example of one: the first
+# version spelled out a sample token inside the file, and the sample read as
+# somewhere to type - which is exactly what happened the first time anyone
+# filled it in.
 TEMPLATE = {
+    "PUT THE TOKEN FROM @BotFather ON THE token LINE BELOW, BETWEEN THE QUOTES":
+        "leave chat_id null - the first message the bot gets claims it",
     "token": "",
     "chat_id": None,
-    "_help": [
-        "token: from @BotFather on Telegram. Talk to it, send /newbot, and it",
-        "  gives you a line like 123456:AAE... Paste that here.",
-        "chat_id: leave it null. The first message the bot receives claims it,",
-        "  and the number is written back here. After that nobody else can",
-        "  drive your laptop with it.",
-    ],
 }
 
 
