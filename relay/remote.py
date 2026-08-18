@@ -57,10 +57,17 @@ RETRY_MAX = 60
 MIN_TOKEN = 30
 MAX_TOKEN = 80
 
-# How much of a finished step to send back. A transcript runs to a couple of
-# hundred lines and a phone is not the place to read one.
-RESULT_LINES = 12
-BAD_LINES = 6
+# How much of a finished step to send back.
+#
+# Small on purpose. Everything an agent says is new, so the diff against
+# the window before the step is the whole reply - and the first version
+# put twelve lines of somebody's prose on a phone screen. The card is a
+# verdict, not a transcript: the detail is in the window it came from, and
+# anyone who wants it will go and look.
+RESULT_LINES = 5
+RESULT_CHARS = 500
+LINE_CHARS = 140
+BAD_LINES = 4
 
 # How many of a batch's prompts to list on the card before summarising the
 # rest. More than a few and the state line is pushed off a phone screen.
@@ -110,6 +117,23 @@ def _looks_wrong(line):
 def _is_chrome(line):
     low = line.strip().lower()
     return any(low == word or low.startswith(word) for word in CHROME)
+
+
+def _last_of(lines):
+    """The end of what was said, within a budget a phone can hold.
+
+    Counted in characters as well as lines, because five lines of an agent
+    explaining itself is a screenful and five lines of a terminal is
+    nothing.
+    """
+    out, budget = [], RESULT_CHARS
+    for line in reversed(lines[-RESULT_LINES:]):
+        line = line[:LINE_CHARS]
+        if out and len(line) > budget:
+            break
+        out.append(line)
+        budget -= len(line)
+    return list(reversed(out))
 
 # What gets written on first run. The instructions are one line, and they say
 # where to put the token rather than showing an example of one: the first
@@ -295,8 +319,28 @@ class Remote:
         self._thread.start()
         return self
 
-    def stop(self):
+    def stop(self, why="Relay was stopped"):
+        """Say goodbye before going, if anything was left in the air.
+
+        A card frozen on "working" is worse than no card: it says the laptop
+        is busy on your behalf when the process that was doing it no longer
+        exists. Measured three times over one evening, every one of them a
+        restart to deploy the next change while a chain sat waiting.
+
+        Short timeout, and failure ignored. This runs on the way out and must
+        not hold shutdown up on a network that is not there.
+        """
         self._stop.set()
+        if self.pilot.running or self.pending:
+            self.pilot.stop(why)
+            self.pending.clear()
+            self._icon, self._head = ICON_STOPPED, why
+            self._note = ("Whatever was waiting is lost. Send it again once "
+                          "Relay is back.")
+            try:
+                self.edit(self._card, self._render(), timeout=6)
+            except Exception:
+                pass
 
     @property
     def chat_id(self):
@@ -316,7 +360,7 @@ class Remote:
             self.log(f"[remote] could not reply: {exc}")
             return None
 
-    def edit(self, message_id, text):
+    def edit(self, message_id, text, timeout=20):
         """Rewrite a message already sent. False if it could not be done."""
         if not self.chat_id or not message_id:
             return False
@@ -324,7 +368,7 @@ class Remote:
             self.api(
                 self.settings["token"], "editMessageText",
                 {"chat_id": self.chat_id, "message_id": message_id,
-                 "text": text[:3900], "parse_mode": "HTML"}, timeout=20)
+                 "text": text[:3900], "parse_mode": "HTML"}, timeout=timeout)
             return True
         except Exception as exc:
             self.log(f"[remote] could not edit: {exc}")
@@ -647,13 +691,15 @@ class Remote:
         being answered is "did that work", and an error twenty lines up is the
         answer even when the last line looks calm.
         """
-        lines = [ln for ln in new_lines if len(ln) > 1 and not _is_chrome(ln)]
+        asked = {p.strip() for p in self._prompts}
+        lines = [ln for ln in new_lines
+                 if len(ln) > 1 and not _is_chrome(ln) and ln.strip() not in asked]
         if not lines:
             self._paint(note="Nothing new appeared in the window - it may have "
                              "answered somewhere this cannot see.")
             return
         self._paint(bad=[ln for ln in lines if _looks_wrong(ln)][:BAD_LINES],
-                    tail=lines[-RESULT_LINES:])
+                    tail=_last_of(lines))
 
     def _progress(self, phase, index, total, seconds_left):
         """Called from the queue's thread, once a second. Rewrites the card.

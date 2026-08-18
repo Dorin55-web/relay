@@ -390,6 +390,41 @@ check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
+print("\n--- the card is a verdict, not a transcript ---")
+# Everything an agent says is new, so the diff is the whole reply. The first
+# version put twelve lines of somebody's prose on a phone screen.
+bot, api, sent, _ = make()
+bot._prompts = ["find the cause"]
+bot._result(0, ["find the cause"] + [f"paragraph number {n} " + "x" * 200
+                                     for n in range(20)])
+card = api.card
+check("it is short enough to glance at", len(card) < 1200, str(len(card)))
+check("no line runs past the budget",
+      all(len(ln) < 200 for ln in card.splitlines()),
+      str(max(len(ln) for ln in card.splitlines())))
+check("and the prompt is not repeated in the output",
+      card.count("find the cause") == 1, str(card.count("find the cause")))
+
+
+print("\n--- shutting down does not leave a card saying 'working' ---")
+# Three times in one evening: a chain waiting on a reply, killed by a restart,
+# and the phone left showing a laptop busy on work that no longer existed.
+bot, api, sent, _ = make()
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "something"}})
+check("it says working first", remote_mod.ICON_WORKING in api.card, api.card)
+bot.stop("Relay was restarted")
+check("and stopped afterwards", api.card.startswith(remote_mod.ICON_STOPPED),
+      api.card[:40])
+check("saying what became of the queue", "lost" in api.card, api.card)
+check("which is also emptied", not bot.pending, str(bot.pending))
+
+# Nothing in the air means nothing to announce.
+bot, api, sent, _ = make()
+bot.stop()
+check("a quiet shutdown says nothing", api.sent == [] and api.edits == [],
+      f"{api.sent} {api.edits}")
+
+
 print("\n--- it tells you when the agent stops to ask you something ---")
 # The one interruption worth making. Nobody is in the room to notice.
 bot, api, sent, _ = make()
