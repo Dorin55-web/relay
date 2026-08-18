@@ -79,6 +79,8 @@ class VoicePrompt:
         # Built the first time the write window is opened; most sessions
         # only ever dictate and never need the text model in memory.
         self.text_translator = None
+        # The phone and the write window can both be the first to want it.
+        self._translator_lock = threading.Lock()
         # Pinned when a dictation starts, so phrases keep going to the window
         # you were writing in even if focus wanders mid-sentence.
         self._target_hwnd = None
@@ -468,6 +470,21 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not open the chain window: {exc}")
 
+    def _to_english(self, text):
+        """Romanian in, English out, for a prompt arriving from the phone.
+
+        The same model the write window uses, and built the same way: on first
+        use rather than at start-up, because most sessions dictate and never
+        need it in memory at all. Under a lock, since the phone and the write
+        window can both be the first to ask.
+        """
+        with self._translator_lock:
+            if self.text_translator is None:
+                from .translator import TextTranslator
+
+                self.text_translator = TextTranslator(self.config)
+        return self.text_translator.translate(text)
+
     def _start_remote(self):
         """Start the phone side, if a token has been put in telegram.json.
 
@@ -492,6 +509,7 @@ class VoicePrompt:
                 target_getter=lambda: (
                     self.tracker.current() if self.tracker is not None else None
                 ),
+                translate=self._to_english,
             ).start()
         except Exception as exc:
             self.feedback.error(f"could not start the phone link: {exc}")

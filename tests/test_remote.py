@@ -167,6 +167,53 @@ time.sleep(0.1)
 check("nothing was sent to the window", sent == [], str(sent))
 
 
+print("\n--- Romanian in, English out ---")
+# The whole point of the program, arriving by a different door. The phone gets
+# the translation back as well as the queue, because that is the only chance to
+# see a mangled sentence before it is typed into an agent.
+bot, api, sent, _ = make()
+bot.translate = lambda text: "find the cause of the freeze"
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE},
+                                         "text": "gaseste cauza inghetarii"}})
+check("the English is what gets queued",
+      list(bot.pending) == ["find the cause of the freeze"], str(bot.pending))
+check("and it is shown back on the phone",
+      "find the cause of the freeze" in api.sent[-1], str(api.sent))
+
+print("\n--- unless you ask for it as typed ---")
+bot, api, sent, _ = make()
+bot.translate = lambda text: "SHOULD NOT BE USED"
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE},
+                                         "text": "=git log --oneline -5"}})
+check("a leading = sends it verbatim",
+      list(bot.pending) == ["git log --oneline -5"], str(bot.pending))
+
+print("\n--- and a translation that fails does not lose the prompt ---")
+# Sending it in the wrong language is a worse outcome than sending nothing
+# only if you never find out. The reply says which happened.
+bot, api, sent, _ = make()
+
+
+def broken(text):
+    raise RuntimeError("the model is not available")
+
+
+bot.translate = broken
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE},
+                                         "text": "gaseste cauza"}})
+check("the Romanian is queued instead", list(bot.pending) == ["gaseste cauza"],
+      str(bot.pending))
+check("and it says so", any("Could not translate" in s for s in api.sent),
+      str(api.sent))
+
+print("\n--- commands are never translated ---")
+bot, api, sent, _ = make()
+translated = []
+bot.translate = lambda text: translated.append(text) or text
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/status"}})
+check("the translator was not asked", translated == [], str(translated))
+
+
 print("\n--- a message becomes a step ---")
 bot, api, sent, _ = make()
 bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "first"}})

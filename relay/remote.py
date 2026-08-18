@@ -200,7 +200,7 @@ class Remote:
     """
 
     def __init__(self, settings, send, target_getter, log=print,
-                 api=call_api, is_window=None):
+                 api=call_api, is_window=None, translate=None):
         self.settings = settings
         self.target_getter = target_getter
         # Injected for the same reason the queue injects it: whether a
@@ -214,6 +214,7 @@ class Remote:
         # A window picked from the phone with /target. None means follow
         # whatever you last clicked into, which is what everything else does.
         self.chosen = None
+        self.translate = translate
         self.pilot = Autopilot(send=send, on_progress=self._progress, log=log)
         self._stop = threading.Event()
         self._thread = None
@@ -289,8 +290,9 @@ class Remote:
             save_chat_id(self.settings, int(chat))
             self.log(f"[remote] paired with chat {chat}")
             self.say("Paired. Only this chat can drive the laptop now.\n\n"
-                     "Send any text and it goes into the window you were last "
-                     "working in. /status says what it can see, /stop cancels.")
+                     "Write in Romanian and it goes into the window you were "
+                     "last working in, in English. /target chooses the window, "
+                     "/status says what it can see, /stop cancels.")
             return
 
         if int(chat) != int(self.chat_id):
@@ -302,8 +304,40 @@ class Remote:
             self._command(text)
             return
 
-        self.pending.append(text)
-        self.say(f"Queued. {len(self.pending)} waiting.")
+        prompt, english = self._to_english(text)
+        self.pending.append(prompt)
+        if english and english != text:
+            # The translation goes back to the phone, not just into the queue.
+            # It is what will actually be typed, and seeing it is the only
+            # chance to /stop a sentence the model got wrong before it lands.
+            self.say(f"Queued, {len(self.pending)} waiting:\n\n{english}")
+        else:
+            self.say(f"Queued. {len(self.pending)} waiting.")
+
+    def _to_english(self, text):
+        """Romanian in, English out - the same model the write window uses.
+
+        Returns (what to send, the translation or None). A leading `=` sends
+        the line exactly as typed: the model translates Romanian, and a prompt
+        that is already English, or is a file path, or a command, is better off
+        untouched.
+
+        A translation that fails hands back the Romanian rather than nothing.
+        Losing the prompt would be a worse outcome than sending it in the wrong
+        language, and the reply says which happened.
+        """
+        if text.startswith("="):
+            return text[1:].strip(), None
+        if self.translate is None:
+            return text, None
+        try:
+            english = (self.translate(text) or "").strip()
+        except Exception as exc:
+            self.log(f"[remote] could not translate: {exc}")
+            self.say(f"Could not translate that ({exc}); queueing the Romanian "
+                     f"as it is.")
+            return text, None
+        return (english, english) if english else (text, None)
 
     def _command(self, text):
         parts = text.split()
@@ -320,11 +354,14 @@ class Remote:
             else:
                 self.say("Nothing was running. The queue is empty.")
         elif command in ("/start", "/help"):
-            self.say("Send text and it is typed into the window you were last "
-                     "working in, once whatever is in there has finished.\n\n"
+            self.say("Write in Romanian. It is translated to English and typed "
+                     "into the window you were last working in, once whatever "
+                     "is in there has finished.\n\n"
                      "/status  what it can see right now\n"
                      "/target  choose which window to write into\n"
-                     "/stop    cancel the queue")
+                     "/stop    cancel the queue\n\n"
+                     "Start a line with = to send it exactly as typed, without "
+                     "translating.")
         else:
             self.say("I only know /status, /target, /stop and /help.")
 
