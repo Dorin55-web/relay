@@ -376,6 +376,13 @@ class AudioRecorder:
         try:
             self._stream.stop()
             self._stream.close()
+        except Exception as exc:
+            # Unplug a USB mic, or walk out of range with a headset, and
+            # closing raises. The audio already captured is still good, and
+            # everything below has to happen anyway: without it the streaming
+            # worker never hears that the session ended, so it waits for ever
+            # and the clipboard it is holding on your behalf is never returned.
+            print(f"[audio] the input did not close cleanly ({exc})")
         finally:
             self._stream = None
             self.level = 0.0
