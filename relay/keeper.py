@@ -123,11 +123,19 @@ class Keeper:
     # --- talking to the phone --------------------------------------------
 
     def say(self, text, keys=True):
+        """Send a line to the phone, and write down that it was sent.
+
+        Logged because the keeper is silent by design: nothing it does appears
+        on screen, so without this the only record of it having spoken is on a
+        device that is not the one you would be looking at while working out
+        whether it spoke.
+        """
         params = {"chat_id": self.conf["chat_id"], "text": text}
         if keys:
             params["reply_markup"] = json.dumps(KEYBOARD)
         try:
             self.api(self.conf["token"], "sendMessage", params, timeout=20)
+            self.log(f"[keeper] told you: {text.splitlines()[0]}")
             return True
         except Exception as exc:
             self.log(f"[keeper] could not send: {exc}")
