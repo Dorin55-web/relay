@@ -428,6 +428,31 @@ check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
+print("\n--- restarting from the phone ---")
+# For the state that has actually happened: the process alive and answering,
+# and the thing it draws frozen. Nothing can fix that from the inside, so
+# quitting is the repair - but only because something else is watching.
+left = []
+bot, api, sent, _ = make()
+bot.on_restart = lambda: left.append(True)
+remote_mod.RESTART_MARKER = Path(tempfile.mkdtemp()) / ".relay-restart"
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/restart"}})
+check("it goes", left == [True], str(left))
+check("saying so first", any("Restarting" in s for s in api.sent), str(api.sent))
+# Without it, a deliberate exit and a crash look identical from outside, and
+# the keeper would announce a death that had been asked for.
+check("and leaves the marker that says it was meant",
+      remote_mod.RESTART_MARKER.exists())
+
+# Switching the lights off with nobody to turn them back on is worse than
+# being stuck, so this refuses rather than obeying.
+bot, api, sent, _ = make()
+bot.on_restart = None
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/restart"}})
+check("but not with no keeper running",
+      any("no keeper" in s for s in api.sent), str(api.sent))
+
+
 print("\n--- a warning has to be worth reading ---")
 # The first list of words held "cannot", "could not", "not found" and "no
 # such", which are ordinary English. Two of these four sentences came back

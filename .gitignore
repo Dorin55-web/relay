@@ -19,3 +19,7 @@ Thumbs.db
 
 # Holds the Telegram bot token. A credential, never in the repository.
 telegram.json
+
+# The keeper leaves these behind.
+keeper.log
+.relay-restart

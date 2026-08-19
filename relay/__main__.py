@@ -470,6 +470,23 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not open the chain window: {exc}")
 
+    def request_quit(self):
+        """Shut down from a thread that is not the one owning the windows.
+
+        Called by the phone. Qt will not let another thread close its windows,
+        so the request is put onto the thread that can - and if there is no
+        orb, because this is running headless, it ends the process directly.
+        """
+        if self.orb is None:
+            self.shutdown()
+            import os
+
+            os._exit(0)
+            return
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self.orb, self.orb.quit)
+
     def _to_english(self, text):
         """Romanian in, English out, for a prompt arriving from the phone.
 
@@ -510,6 +527,10 @@ class VoicePrompt:
                     self.tracker.current() if self.tracker is not None else None
                 ),
                 translate=self._to_english,
+                # /restart from the phone. Quitting is only a repair when
+                # something else is watching for the gap, so this is
+                # handed over rather than assumed.
+                on_restart=self.request_quit,
             ).start()
         except Exception as exc:
             self.feedback.error(f"could not start the phone link: {exc}")

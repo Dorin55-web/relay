@@ -38,6 +38,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # holds a credential that must not be.
 SETTINGS_PATH = PROJECT_ROOT / "telegram.json"
 
+# Left behind on a deliberate exit so the keeper can tell a restart you
+# asked for from a process that fell over. relay/keeper.py reads it.
+RESTART_MARKER = PROJECT_ROOT / ".relay-restart"
+
+# Buttons rather than remembered spelling. Telegram keeps this under the
+# text box until it is replaced, so it is sent once and stays.
+KEYBOARD = {
+    "keyboard": [["/status", "/target"], ["/stop", "/restart"]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
 API = "https://api.telegram.org/bot{token}/{method}"
 
 # Telegram holds the request open until something arrives or this many seconds
@@ -295,7 +307,8 @@ class Remote:
     """
 
     def __init__(self, settings, send, target_getter, log=print,
-                 api=call_api, is_window=None, translate=None):
+                 api=call_api, is_window=None, translate=None,
+                 on_restart=None):
         self.settings = settings
         self.target_getter = target_getter
         # Injected for the same reason the queue injects it: whether a
@@ -313,6 +326,9 @@ class Remote:
         # taken back up after a restart. See _find_remembered.
         self.remembered = settings.get("target") or None
         self.translate = translate
+        # How to leave, when asked to. None means nobody is watching for
+        # the gap, so /restart refuses rather than switching the lights off.
+        self.on_restart = on_restart
         # The one message a batch of prompts lives in. Set up in one place
         # rather than two: the first version listed these fields here as well
         # as in _new_card, and adding one to a card layout left the other
@@ -373,7 +389,8 @@ class Remote:
             result = self.api(
                 self.settings["token"], "sendMessage",
                 {"chat_id": self.chat_id, "text": text[:3900],
-                 "parse_mode": "HTML"}, timeout=20)
+                 "parse_mode": "HTML",
+                 "reply_markup": json.dumps(KEYBOARD)}, timeout=20)
             return (result or {}).get("message_id")
         except Exception as exc:
             self.log(f"[remote] could not reply: {exc}")
@@ -579,6 +596,8 @@ class Remote:
                 self.say("Stopped, and the queue is empty.")
             else:
                 self.say("Nothing was running. The queue is empty.")
+        elif command == "/restart":
+            self._restart()
         elif command in ("/start", "/help"):
             self.say("Write in Romanian. It is translated to English and typed "
                      "into the window you were last working in, once whatever "
@@ -589,7 +608,31 @@ class Remote:
                      "Start a line with = to send it exactly as typed, without "
                      "translating.")
         else:
-            self.say("I only know /status, /target, /stop and /help.")
+            self.say("I only know /status, /target, /stop, /restart and "
+                     "/help.")
+
+    def _restart(self):
+        """Leave, having asked the keeper to bring us straight back.
+
+        For the state that has actually happened: the process alive and
+        answering, and the thing it draws frozen. Nothing here can fix that
+        from the inside, and quitting is a repair when something else is
+        watching for the gap.
+
+        The marker is what tells the keeper this was meant. Without it a
+        deliberate exit and a crash look identical, and the keeper would
+        announce a death you had asked for.
+        """
+        if not self.on_restart:
+            self.say("There is no keeper running, so nothing would start me "
+                     "again. Leaving myself off is worse than being stuck.")
+            return
+        self.say("Restarting. The keeper will bring me back in a few seconds.")
+        try:
+            RESTART_MARKER.write_text("asked from the phone\n", encoding="utf-8")
+        except OSError as exc:
+            self.log(f"[remote] could not write the restart marker: {exc}")
+        self.on_restart()
 
     def _target_command(self, which):
         """List the windows worth writing into, or pin one of them.
