@@ -4,8 +4,8 @@
 python tests/run.py
 ```
 
-Runs all seventeen suites, each in its own process, and prints a line per suite.
-About a minute for the lot.
+Runs all twenty-six suites, each in its own process, and prints a line per
+suite. About a minute for the lot.
 Exit code is non-zero if any failed. To run a few:
 
 ```bash
@@ -39,6 +39,15 @@ the window manager, not for a mock.
 | `test_chain.py` | The window in front of the queue: that the list you build is the list that gets sent, that editing a step edits only that step, and that a chain aimed at a window Relay cannot read is refused with a reason instead of starting and stalling | 1 s |
 | `test_autopilot.py` | The prompt queue refusing to advance. Almost every check asserts that nothing was sent: while the agent works, while it waits on you, while its state cannot be read, on a single flicker of idle, before it has picked the last prompt up, and into a window that would not come to the front | 5 s |
 | `test_first_open.py` | That opening the write window does not stall. Has to be its own process: the cost it guards is paid once per process, so checking for it after another suite has opened a window passes whatever the code does | 3 s |
+| `test_dictation.py` | One dictation from the key press to the paste, with the microphone, the model and the clipboard stood in for. Three states and one queue — and almost every failure it has ever had was the same shape, so most of these check that a step which throws still ends at `idle` instead of leaving the orb spinning and the hotkey dead | 3 s |
+| `test_phrases.py` | Where a spoken phrase begins and ends, decided in the audio callback from blocks handed to it directly. A cough is not a phrase, an idle microphone does not grow, and a device pulled out mid-sentence still ends the session — without that last one the clipboard being held on your behalf is never handed back | 3 s |
+| `test_config.py` | What a hand-edited `config.json` is allowed to do. Chiefly that it cannot cost you the rest of your settings: a file that is not a settings object no longer stops Relay from starting at all, and saving the orb over a file with a trailing comma keeps your version rather than writing the defaults over it | 1 s |
+| `test_prompts.py` | The prompt library, edited by hand as it is meant to be: one bad entry costs that entry and never the menu, a save that cannot land leaves the good file where it was, and Romanian comes back as Romanian | 1 s |
+| `test_profiles.py` | `profiles.json`, also edited by hand, where a mistake is not symmetrical. A misspelled condition used to make its rule match every window on screen — and as the idle rule that reads as "it has finished" whatever is actually there, which is how a queue types over a reply in progress | 1 s |
+| `test_translator.py` | Romanian text to English text without the model: the line breaks you typed coming back where you put them, each sentence sent once however many times you pause, and a document longer than the cache no longer failing on a sentence the cache has since forgotten | 1 s |
+| `test_replies.py` | What the bot sends back, read the way Telegram reads it. A window called `main.py <2>` was enough to have a message refused outright, and the failure is silence on the phone at the moment you asked what was happening. Also that a photo gets an answer rather than being swallowed, and that one message nothing can be done with does not deafen the link | 1 s |
+| `test_startup.py` | The single-instance mutex, with a real second process — because there is no other way to check that a handle disappears when a process dies. That a second copy is refused, that the name is free the instant the holder is killed, and that the keeper is watching that same name: nothing but the string connects them | 1 s |
+| `test_imports.py` | Every module loading, and every name reached across a module boundary still being where its caller looks for it. Most of Relay is imported the moment it is needed, so a misspelled name in the look picker is not a start-up error — it is a menu item that does nothing, weeks later | 2 s |
 
 `test_compose.py` needs the Marian translation model. The first run downloads
 it; later ones are fast. `test_bluetooth.py` opens real audio devices.
@@ -72,7 +81,7 @@ desktop is a test run you stop doing.
 
 ## `probes/`
 
-Eleven scripts that report numbers instead of passing or failing. They are for
+Twelve scripts that report numbers instead of passing or failing. They are for
 when something needs investigating, and `run.py` deliberately ignores them —
 a runner cannot tell whether a measurement went well.
 
