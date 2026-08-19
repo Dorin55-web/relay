@@ -168,4 +168,85 @@ check("it does not claim success", stubborn.bring_back("test") is False)
 check("and says what it saw", any("has not come up" in s for s in api.sent),
       str(api.sent))
 
+print("\n--- a photo sent while Relay is down is answered too ---")
+# The keeper exists to break silence. Ignoring a message because it happens not
+# to be text puts back exactly the silence it was written to remove.
+watcher, api, state = make(alive=False)
+watcher.was_alive = False
+api.updates.append({"update_id": 1, "message": {"chat": {"id": MINE},
+                                                "photo": [{"file_id": "x"}]}})
+watcher.tick()
+check("it says Relay is not running",
+      any("not running" in s for s in api.sent), str(api.sent))
+check("and starts nothing on its own", state["started"] == 0, str(state["started"]))
+
+
+print("\n--- a tick that throws does not end the watch ---")
+# The one program that must not stop. If it falls over there is nothing left
+# watching, and no sign of it anywhere - the thing that reports trouble is the
+# thing that died.
+api = Api()
+calls = {"n": 0}
+stubborn = Keeper(conf={"token": "t", "chat_id": MINE}, api=api,
+                  alive=lambda: True, start=lambda: True,
+                  log=lambda *_: None, watch_seconds=0, poll_seconds=0)
+
+
+def sometimes_explodes():
+    calls["n"] += 1
+    if calls["n"] == 1:
+        raise RuntimeError("something unforeseen")
+    if calls["n"] >= 3:
+        stubborn.running = False
+    return 0
+
+
+stubborn.tick = sometimes_explodes
+stubborn.run()
+check("it carried on", calls["n"] >= 3, str(calls["n"]))
+
+
+print("\n--- and neither does Telegram being unreachable ---")
+class Unreachable(Api):
+    def __call__(self, token, method, params, timeout=None):
+        if method == "getUpdates" and params.get("timeout") != 0:
+            raise OSError("the network is not there")
+        return super().__call__(token, method, params, timeout)
+
+
+api = Unreachable()
+watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=api,
+                 alive=lambda: False, start=lambda: True,
+                 log=lambda *_: None, watch_seconds=0, poll_seconds=0)
+watcher.was_alive = False
+try:
+    watcher.tick()
+    failed = None
+except Exception as exc:
+    failed = f"{type(exc).__name__}: {exc}"
+check("the tick came back", failed is None, str(failed))
+
+
+print("\n--- the settings it reads ---")
+import json as _json
+folder = Path(tempfile.mkdtemp(prefix="relay-keeper-settings-"))
+keeper_mod.SETTINGS_PATH = folder / "telegram.json"
+check("no file at all", keeper_mod.settings() is None)
+
+keeper_mod.SETTINGS_PATH.write_text("{not json", encoding="utf-8")
+check("a broken file", keeper_mod.settings() is None)
+
+keeper_mod.SETTINGS_PATH.write_text(_json.dumps({"token": "", "chat_id": 5}),
+                                    encoding="utf-8")
+check("no token", keeper_mod.settings() is None)
+
+keeper_mod.SETTINGS_PATH.write_text(_json.dumps({"token": "t", "chat_id": None}),
+                                    encoding="utf-8")
+check("no chat paired yet", keeper_mod.settings() is None)
+
+keeper_mod.SETTINGS_PATH.write_text(_json.dumps({"token": "t", "chat_id": "111"}),
+                                    encoding="utf-8")
+conf = keeper_mod.settings()
+check("a filled-in file", conf is not None and conf["chat_id"] == 111, str(conf))
+
 sys.exit(report.finish())

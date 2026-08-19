@@ -244,11 +244,14 @@ class Keeper:
     def handle(self, update):
         message = update.get("message") or {}
         chat = (message.get("chat") or {}).get("id")
-        text = (message.get("text") or "").strip().lower()
-        if not chat or int(chat) != int(self.conf["chat_id"]) or not text:
+        if not chat or int(chat) != int(self.conf["chat_id"]):
             return
+        text = (message.get("text") or "").strip().lower()
 
-        command = text.split()[0]
+        # A photo or a voice note has no command in it, and falls through to
+        # the same answer as a prompt would. Returning early on it would put
+        # back the silence this program exists to break.
+        command = text.split()[0] if text else ""
         if command in ("/start", "/restart"):
             self.bring_back("you asked for it")
         elif command == "/status":
@@ -270,7 +273,16 @@ class Keeper:
             self.say("The keeper is up, but Relay is not running.\n\n"
                      "Send /start to bring it back.")
         while self.running:
-            wait = self.tick()
+            try:
+                wait = self.tick()
+            except Exception as exc:
+                # The one thing this program must not do is stop. It is what
+                # notices that Relay has gone, so a keeper that fell over on an
+                # odd message would leave nothing watching - and no sign of it
+                # anywhere, because the thing that reports trouble is the thing
+                # that died.
+                self.log(f"[keeper] carrying on after {exc!r}")
+                wait = self.watch_seconds
             if wait:
                 time.sleep(wait)
 
