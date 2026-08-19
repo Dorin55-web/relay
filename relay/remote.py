@@ -42,12 +42,16 @@ SETTINGS_PATH = PROJECT_ROOT / "telegram.json"
 # asked for from a process that fell over. relay/keeper.py reads it.
 RESTART_MARKER = PROJECT_ROOT / ".relay-restart"
 
-# Buttons rather than remembered spelling. Telegram keeps this under the
-# text box until it is replaced, so it is sent once and stays.
+# Buttons rather than remembered spelling.
+#
+# Sent with a reply, not with every message. Telegram keeps the last
+# keyboard it was given until something replaces it, so attaching it to
+# each card was both pointless and worse than pointless: the panel sat
+# open over half a phone screen and reopened itself whenever it was
+# closed. Without is_persistent it can be folded away like any other.
 KEYBOARD = {
     "keyboard": [["/status", "/target"], ["/stop", "/restart"]],
     "resize_keyboard": True,
-    "is_persistent": True,
 }
 
 API = "https://api.telegram.org/bot{token}/{method}"
@@ -381,16 +385,17 @@ class Remote:
     def chat_id(self):
         return self.settings.get("chat_id")
 
-    def say(self, text):
+    def say(self, text, keys=False):
         """Send a message. Returns its id, so it can be edited later."""
         if not self.chat_id:
             return None
+        params = {"chat_id": self.chat_id, "text": text[:3900],
+                  "parse_mode": "HTML"}
+        if keys:
+            params["reply_markup"] = json.dumps(KEYBOARD)
         try:
             result = self.api(
-                self.settings["token"], "sendMessage",
-                {"chat_id": self.chat_id, "text": text[:3900],
-                 "parse_mode": "HTML",
-                 "reply_markup": json.dumps(KEYBOARD)}, timeout=20)
+                self.settings["token"], "sendMessage", params, timeout=20)
             return (result or {}).get("message_id")
         except Exception as exc:
             self.log(f"[remote] could not reply: {exc}")
@@ -518,6 +523,25 @@ class Remote:
             self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
         return updates
 
+    def _confirm(self):
+        """Tell Telegram we are done with everything read so far.
+
+        A message is only consumed when the next request is made with a higher
+        offset. Ordinarily the next poll does it, a second or two later, and
+        nobody has to think about it - but a command that ends the process
+        never makes that call, so the message stays pending and the next
+        Relay to start is handed it again.
+
+        Which is exactly what happened with /restart: it restarted, came back,
+        was given the same instruction, and restarted again, four times over
+        before anyone stopped it.
+        """
+        try:
+            self.api(self.settings["token"], "getUpdates",
+                     {"offset": self._offset, "timeout": 0}, timeout=10)
+        except Exception as exc:
+            self.log(f"[remote] could not confirm the last message: {exc}")
+
     def _handle(self, update):
         message = update.get("message") or update.get("edited_message") or {}
         chat = (message.get("chat") or {}).get("id")
@@ -532,7 +556,7 @@ class Remote:
             self.say("Paired. Only this chat can drive the laptop now.\n\n"
                      "Write in Romanian and it goes into the window you were "
                      "last working in, in English. /target chooses the window, "
-                     "/status says what it can see, /stop cancels.")
+                     "/status says what it can see, /stop cancels.", keys=True)
             return
 
         if int(chat) != int(self.chat_id):
@@ -606,7 +630,7 @@ class Remote:
                      "/target  choose which window to write into\n"
                      "/stop    cancel the queue\n\n"
                      "Start a line with = to send it exactly as typed, without "
-                     "translating.")
+                     "translating.", keys=True)
         else:
             self.say("I only know /status, /target, /stop, /restart and "
                      "/help.")
@@ -632,6 +656,8 @@ class Remote:
             RESTART_MARKER.write_text("asked from the phone\n", encoding="utf-8")
         except OSError as exc:
             self.log(f"[remote] could not write the restart marker: {exc}")
+        # Before leaving, not after: there is no after. See _confirm.
+        self._confirm()
         self.on_restart()
 
     def _target_command(self, which):

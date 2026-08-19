@@ -42,6 +42,7 @@ class Api:
         self.sent = []          # every sendMessage, in order
         self.edits = []         # every editMessageText, in order
         self.messages = {}      # id -> what it now says
+        self.confirmed = None   # the offset it last said it was done with
         self.calls = 0
 
     @property
@@ -58,6 +59,10 @@ class Api:
     def __call__(self, token, method, params, timeout=None):
         self.calls += 1
         if method == "getUpdates":
+            # timeout=0 is not a poll, it is "I am finished with those".
+            if params.get("timeout") == 0:
+                self.confirmed = params.get("offset")
+                return []
             out, self.updates = self.updates, []
             return out
         if method == "sendMessage":
@@ -435,6 +440,7 @@ print("\n--- restarting from the phone ---")
 left = []
 bot, api, sent, _ = make()
 bot.on_restart = lambda: left.append(True)
+bot._offset = 7          # as if messages up to 6 had already been read
 remote_mod.RESTART_MARKER = Path(tempfile.mkdtemp()) / ".relay-restart"
 bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/restart"}})
 check("it goes", left == [True], str(left))
@@ -443,6 +449,12 @@ check("saying so first", any("Restarting" in s for s in api.sent), str(api.sent)
 # the keeper would announce a death that had been asked for.
 check("and leaves the marker that says it was meant",
       remote_mod.RESTART_MARKER.exists())
+# The loop this caused: a message is only consumed when the next request is
+# made with a higher offset, and there is no next request after quitting. The
+# restart came back, was handed the same instruction, and restarted again -
+# four times over before it was stopped by hand.
+check("and tells Telegram it is done with that message first",
+      api.confirmed == 7, str(api.confirmed))
 
 # Switching the lights off with nobody to turn them back on is worse than
 # being stuck, so this refuses rather than obeying.

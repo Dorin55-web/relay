@@ -50,10 +50,12 @@ WATCH_SECONDS = 5        # how often to look while Relay is up
 POLL_SECONDS = 25        # how long a message request is held open while it is down
 STARTUP_GRACE = 20       # how long to give it to claim the mutex after starting
 
+# Offered when Relay is down, because /start is then the only thing worth
+# doing. Not persistent: a panel that reopens itself every time it is
+# closed is a panel you end up fighting.
 KEYBOARD = {
     "keyboard": [["/start", "/status"]],
     "resize_keyboard": True,
-    "is_persistent": True,
 }
 
 
@@ -168,6 +170,11 @@ class Keeper:
         while time.monotonic() < deadline:
             if self.alive():
                 self.was_alive = True
+                # Hand over cleanly. A message is only consumed when the next
+                # request is made with a higher offset, and this stops asking
+                # the moment Relay is up - so without this the instruction that
+                # started Relay is still pending, and Relay is handed it again.
+                self.confirm()
                 self.say(f"Relay is back up. ({why})")
                 return True
             time.sleep(1)
@@ -207,6 +214,14 @@ class Keeper:
         for update in self.poll():
             self.handle(update)
         return 0
+
+    def confirm(self):
+        """Say we are done with what has been read, before going quiet."""
+        try:
+            self.api(self.conf["token"], "getUpdates",
+                     {"offset": self.offset, "timeout": 0}, timeout=10)
+        except Exception as exc:
+            self.log(f"[keeper] could not confirm: {exc}")
 
     def poll(self):
         try:
