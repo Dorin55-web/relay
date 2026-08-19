@@ -340,6 +340,44 @@ check("with a word about it",
 bot.alive["all"] = True
 
 
+print("\n--- and the choice survives a restart ---")
+# It did not. A window chosen from the phone lived in memory only, so the next
+# restart handed prompts silently back to whatever had last been clicked - and
+# the first anyone knew was a refusal naming a window nobody had chosen.
+bot, api, sent, path = make()
+bot._handle({"update_id": 1,
+             "message": {"chat": {"id": MINE}, "text": "/target 1"}})
+check("the pin is on disk", json.loads(path.read_text(encoding="utf-8"))
+      .get("target", {}).get("title") == "Claude",
+      path.read_text(encoding="utf-8"))
+
+# A new process, reading the same file.
+settings = remote_mod.load_settings(path)
+check("and loads back", settings["target"]["title"] == "Claude", str(settings))
+
+after = Remote(settings=settings, send=lambda *a: True,
+               target_getter=lambda: HWND, log=lambda *_: None,
+               api=Api(), is_window=lambda _h: True)
+check("nothing is pinned yet", after.chosen is None)
+check("but the window is found again", after._target() == 10, str(after._target()))
+
+# An application that puts the current document in its title is not called the
+# same thing twice, so the profile carries the choice when the name has moved.
+WINDOWS[0] = (11, "Claude - a different conversation", {"name": "Claude"})
+again = Remote(settings=settings, send=lambda *a: True,
+               target_getter=lambda: HWND, log=lambda *_: None,
+               api=Api(), is_window=lambda _h: True)
+check("even when it has been renamed", again._target() == 11, str(again._target()))
+WINDOWS[0] = (10, "Claude", {"name": "Claude"})
+
+print("\n--- and letting go is remembered too ---")
+bot._handle({"update_id": 2,
+             "message": {"chat": {"id": MINE}, "text": "/target 0"}})
+check("the file is cleared",
+      json.loads(path.read_text(encoding="utf-8")).get("target") is None,
+      path.read_text(encoding="utf-8"))
+
+
 print("\n--- a window it cannot read ---")
 was = agent.profile_for
 agent.profile_for = lambda hwnd, profiles=None: None

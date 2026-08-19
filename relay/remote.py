@@ -181,24 +181,30 @@ def load_settings(path=None):
     if not token:
         return None
     chat = data.get("chat_id")
-    return {"token": token, "chat_id": int(chat) if chat else None, "path": path}
+    return {"token": token, "chat_id": int(chat) if chat else None,
+            "target": data.get("target") or None, "path": path}
 
 
-def save_chat_id(settings, chat_id):
-    """Write down which chat claimed the bot, so it survives a restart."""
+def save_setting(settings, key, value):
+    """Write one field back to the file, leaving everything else as it is."""
     path = Path(settings["path"])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         data = dict(TEMPLATE)
         data["token"] = settings["token"]
-    data["chat_id"] = chat_id
+    data[key] = value
     try:
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return True
     except OSError as exc:
-        print(f"[remote] could not remember the chat id: {exc}")
+        print(f"[remote] could not write {key}: {exc}")
         return False
+
+
+def save_chat_id(settings, chat_id):
+    """Write down which chat claimed the bot, so it survives a restart."""
+    return save_setting(settings, "chat_id", chat_id)
 
 
 def set_token(path=None, ask=None):
@@ -303,6 +309,9 @@ class Remote:
         # A window picked from the phone with /target. None means follow
         # whatever you last clicked into, which is what everything else does.
         self.chosen = None
+        # What /target chose, by name rather than by handle, so it can be
+        # taken back up after a restart. See _find_remembered.
+        self.remembered = settings.get("target") or None
         self.translate = translate
         # The one message a batch of prompts lives in. Set up in one place
         # rather than two: the first version listed these fields here as well
@@ -610,6 +619,7 @@ class Remote:
 
         if which == "0":
             self.chosen = None
+            self._forget()
             self.say("Back to following the window you last clicked into.\n\n"
                      + self._describe())
             return
@@ -621,6 +631,9 @@ class Remote:
 
         hwnd, title, profile = windows[int(which) - 1]
         self.chosen = hwnd
+        # Written down, so a restart does not quietly hand the next prompt to
+        # whatever window happened to be clicked last.
+        self._remember(title, profile.get("name"))
         self.say(f"Writing into {title}.\n\n" + self._describe())
 
     @staticmethod
@@ -657,6 +670,8 @@ class Remote:
         message would go to a handle that no longer exists. So it is dropped,
         once, with a word about it.
         """
+        if self.chosen is None and self.remembered:
+            self._find_remembered()
         if self.chosen is not None:
             if self.is_window(self.chosen):
                 return self.chosen
@@ -667,6 +682,39 @@ class Remote:
             return self.target_getter()
         except Exception:
             return None
+
+    def _find_remembered(self):
+        """Take the pin back up after a restart, if the window is still there.
+
+        A handle only means anything inside the process that asked for it, so
+        what is written down is what the window was called. Measured: a target
+        chosen from the phone survived four minutes and one restart, after
+        which prompts went silently back to whatever had last been clicked -
+        and the first anyone knew of it was a refusal naming a window nobody
+        had chosen.
+
+        Matched on the title first, and on the profile when only one window
+        wears it: an application that puts the current document in its title
+        is not called the same thing twice.
+        """
+        title, profile = self.remembered.get("title"), self.remembered.get("profile")
+        windows = agent.recognised_windows()
+        for hwnd, name, found in windows:
+            if name == title:
+                self.chosen = hwnd
+                return
+        same = [w for w in windows if w[2].get("name") == profile]
+        if len(same) == 1:
+            self.chosen = same[0][0]
+            self.remembered["title"] = same[0][1]
+
+    def _remember(self, title, profile):
+        self.remembered = {"title": title, "profile": profile}
+        save_setting(self.settings, "target", self.remembered)
+
+    def _forget(self):
+        self.remembered = None
+        save_setting(self.settings, "target", None)
 
     def _drain(self):
         """Start a chain with everything waiting, once nothing else is running.
