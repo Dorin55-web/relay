@@ -56,6 +56,24 @@ KEYBOARD = {
 }
 NO_KEYBOARD = {"remove_keyboard": True}
 
+# Every command, in one place.
+#
+# Registered with Telegram so that typing "/" opens the list by itself, and
+# printed by /help from the same tuple - two copies of a list like this drift
+# apart, and the one that drifts is always the one somebody is reading.
+#
+# /start is here although Relay never acts on it: when Relay is down the keeper
+# answers, and that is the moment you most need to be told the command exists.
+COMMANDS = (
+    ("status", "What it can see right now"),
+    ("target", "Choose which window to write into"),
+    ("stop", "Cancel the queue"),
+    ("restart", "Quit and come straight back"),
+    ("start", "Start Relay when it is not running"),
+    ("keys", "Show the buttons, /keys off to hide them"),
+    ("help", "This list"),
+)
+
 API = "https://api.telegram.org/bot{token}/{method}"
 
 # Telegram holds the request open until something arrives or this many seconds
@@ -503,7 +521,25 @@ class Remote:
 
     # --- the loop --------------------------------------------------------
 
+    def publish_commands(self):
+        """Tell Telegram what this bot answers to.
+
+        This is what makes pressing "/" in the chat open a list rather than an
+        empty box. Done once at start-up, and quietly: a menu a version behind
+        is a small annoyance, and a bot that refuses to start because a menu
+        could not be published is not.
+        """
+        listing = [{"command": name, "description": what}
+                   for name, what in COMMANDS]
+        try:
+            self.api(self.settings["token"], "setMyCommands",
+                     {"commands": json.dumps(listing)}, timeout=20)
+            self.log(f"[remote] published {len(listing)} commands")
+        except Exception as exc:
+            self.log(f"[remote] could not publish the command list: {exc}")
+
     def _run(self):
+        self.publish_commands()
         self.log("[remote] listening"
                  + ("" if self.chat_id else " - the first message will claim the bot"))
         wait = RETRY_START
@@ -651,14 +687,19 @@ class Remote:
         elif command == "/restart":
             self._restart()
         elif command in ("/start", "/help"):
+            # Built from COMMANDS, not written out again. This block had
+            # already fallen a version behind - it was still offering three
+            # commands when there were six - which is what a second copy of a
+            # list does while nobody is looking at it.
+            width = max(len(name) for name, _ in COMMANDS) + 3
+            listing = "\n".join(f"/{name}{' ' * (width - len(name))}{what}"
+                                for name, what in COMMANDS)
             self.say("Write in Romanian. It is translated to English and typed "
                      "into the window you were last working in, once whatever "
                      "is in there has finished.\n\n"
-                     "/status  what it can see right now\n"
-                     "/target  choose which window to write into\n"
-                     "/stop    cancel the queue\n\n"
-                     "Start a line with = to send it exactly as typed, without "
-                     "translating.")
+                     + listing +
+                     "\n\nStart a line with = to send it exactly as typed, "
+                     "without translating.")
         else:
             self.say("I only know /status, /target, /stop, /restart, /keys "
                      "and /help.")

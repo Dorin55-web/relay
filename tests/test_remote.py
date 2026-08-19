@@ -43,6 +43,7 @@ class Api:
         self.edits = []         # every editMessageText, in order
         self.messages = {}      # id -> what it now says
         self.confirmed = None   # the offset it last said it was done with
+        self.published = None   # the command list it registered
         self.calls = 0
 
     @property
@@ -65,6 +66,9 @@ class Api:
                 return []
             out, self.updates = self.updates, []
             return out
+        if method == "setMyCommands":
+            self.published = json.loads(params["commands"])
+            return True
         if method == "sendMessage":
             self.sent.append(params["text"])
             self.messages[len(self.sent)] = params["text"]
@@ -431,6 +435,37 @@ check("and a step that changed nothing on screen says that",
       "Nothing new appeared" in api.card, api.card)
 check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
+
+
+print("\n--- one list of commands, in one place ---")
+# Pressing "/" in Telegram opens a list only if the bot has registered one.
+bot, api, sent, _ = make()
+bot.publish_commands()
+check("the list is published", api.published is not None, str(api.published))
+check("with every command in it",
+      len(api.published) == len(remote_mod.COMMANDS), str(api.published))
+check("each with something to read",
+      all(c["description"] for c in api.published), str(api.published))
+
+# The help text had already fallen a version behind - three commands listed
+# when there were six - which is what a second copy of a list does while
+# nobody is watching it. It is now printed from the same tuple.
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/help",
+                                         "date": bot._started + 1}})
+helped = api.sent[-1]
+for name, _what in remote_mod.COMMANDS:
+    check(f"/help mentions /{name}", f"/{name}" in helped, helped)
+
+# Every command it publishes has to be one it answers to, or the menu offers
+# things that do nothing.
+answered = []
+for name, _what in remote_mod.COMMANDS:
+    api.sent.clear()
+    bot._handle({"update_id": 9,
+                 "message": {"chat": {"id": MINE}, "text": f"/{name}",
+                             "date": bot._started + 1}})
+    answered.append(not any("I only know" in s for s in api.sent))
+check("and none of them is unknown to it", all(answered), str(answered))
 
 
 print("\n--- the buttons are asked for, never volunteered ---")
