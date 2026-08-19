@@ -734,7 +734,7 @@ def main(argv=None):
         return 0 if set_token() else 1
 
     if args.write_config:
-        path = write_default_config()
+        path = write_default_config(args.config)
         print(f"wrote {path}")
         return 0
 
