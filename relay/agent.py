@@ -135,6 +135,9 @@ def profile_for(hwnd, profiles=None):
     process = window_process(hwnd)
     title = window_title(hwnd)
     for profile in profiles if profiles is not None else load_profiles():
+        if not isinstance(profile, dict):
+            _complain(f"a profile that is not an object ({profile!r:.30}); skipped")
+            continue
         wanted = profile.get("process")
         if wanted and wanted.lower() != process.lower():
             continue
@@ -167,6 +170,22 @@ def _tail(text):
     return lines[-TAIL_LINES:]
 
 
+# What a rule may ask for. Anything else in a rule is a mistake in the file,
+# and mistakes here are not symmetrical - see _matches.
+CONDITIONS = ("text", "absent_text", "line", "absent_line",
+              "button", "absent_button")
+
+# So a profile that is wrong says so once rather than once a second.
+_complained = set()
+
+
+def _complain(about):
+    if about in _complained:
+        return
+    _complained.add(about)
+    print(f"[agent] {about}")
+
+
 def _matches(rule, text, buttons):
     """Every condition in the rule has to hold, and an empty rule never does.
 
@@ -175,12 +194,26 @@ def _matches(rule, text, buttons):
     second is much the stronger of the two - a window that says `Stop` under
     the box you type in is telling you something, and a window that merely
     contains the word somewhere in a conversation is not.
+
+    A condition this does not recognise fails the whole rule rather than being
+    passed over. "Every condition holds" is trivially true of a rule with no
+    conditions left in it, so a misspelled key used to make its rule match
+    every window there is - and on the idle rule that reads as "it has
+    finished" whatever is on screen, which is the one direction of being wrong
+    that types over a reply in progress.
     """
     if not rule:
         return False
     lowered = text.lower()
     tail = None
     for key, wanted in rule.items():
+        if key not in CONDITIONS:
+            _complain(f"no rule condition called {key!r}; that rule can never match")
+            return False
+        if not isinstance(wanted, str):
+            _complain(f"{key!r} should be a phrase, not "
+                      f"{type(wanted).__name__}; that rule can never match")
+            return False
         wanted_low = wanted.lower()
         if key in ("line", "absent_line") and tail is None:
             tail = _tail(text)
