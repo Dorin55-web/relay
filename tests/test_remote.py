@@ -433,6 +433,28 @@ check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
+print("\n--- a message from before this Relay existed is not obeyed ---")
+# The belt to the confirm's braces. A /restart left pending at Telegram is
+# handed to the next Relay, which restarts, which is handed it again - and it
+# had already been sitting there unconfirmed before the confirm was written,
+# so it kept stopping every Relay that started for a quarter of an hour.
+bot, api, sent, _ = make()
+obeyed = []
+bot.on_restart = lambda: obeyed.append(True)
+bot._handle({"update_id": 1,
+             "message": {"chat": {"id": MINE}, "text": "/restart",
+                         "date": bot._started - 60}})
+check("an old command is ignored", obeyed == [], str(obeyed))
+check("silently, because the keeper already answered for it", api.sent == [],
+      str(api.sent))
+
+bot._handle({"update_id": 2,
+             "message": {"chat": {"id": MINE}, "text": "a fresh prompt",
+                         "date": bot._started + 1}})
+check("but anything since is taken", list(bot.pending) == ["a fresh prompt"],
+      str(bot.pending))
+
+
 print("\n--- restarting from the phone ---")
 # For the state that has actually happened: the process alive and answering,
 # and the thing it draws frozen. Nothing can fix that from the inside, so

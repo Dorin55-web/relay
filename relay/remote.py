@@ -22,6 +22,7 @@ seconds, which urllib does as well as anything.
 
 import json
 import threading
+import time
 import urllib.parse
 import urllib.request
 from collections import deque
@@ -348,6 +349,9 @@ class Remote:
         self._stop = threading.Event()
         self._thread = None
         self._offset = 0
+        # Anything older than this was addressed to a Relay that no longer
+        # exists. See _handle.
+        self._started = time.time()
         self._said_waiting = False
 
     # --- outside world ---------------------------------------------------
@@ -547,6 +551,18 @@ class Remote:
         chat = (message.get("chat") or {}).get("id")
         text = (message.get("text") or "").strip()
         if not chat or not text:
+            return
+
+        # Anything sent before this process existed was meant for a Relay that
+        # was not there, and acting on it now is acting on the past. It matters
+        # for one command in particular: a /restart left unconfirmed is handed
+        # to the next Relay, which restarts, which is handed it again. That ran
+        # four times in a row before it was stopped by hand, and would have run
+        # until the machine was turned off.
+        when = message.get("date")
+        if when and float(when) < self._started:
+            self.log(f"[remote] ignoring a message from before I started: "
+                     f"{text[:40]!r}")
             return
 
         if self.chat_id is None:
