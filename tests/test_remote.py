@@ -390,6 +390,34 @@ check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
+print("\n--- a warning has to be worth reading ---")
+# The first list of words held "cannot", "could not", "not found" and "no
+# such", which are ordinary English. Two of these four sentences came back
+# flagged, and a card that warns on every reply is a card whose warning means
+# nothing at all.
+for line in ("The window cannot be read, so it will not type into it.",
+             "I could not find a better way to put this, so here it is.",
+             "Nothing was found in the folder you asked about.",
+             "Nu se poate spune din afara daca a fost oprit."):
+    check(f"prose is left alone: {line[:34]}...",
+          not remote_mod._looks_wrong(line))
+
+for line in ("ModuleNotFoundError: No module named foo",
+             "Traceback (most recent call last):",
+             "npm ERR! build failed",
+             "Access is denied."):
+    check(f"but this is caught: {line[:34]}...", remote_mod._looks_wrong(line))
+
+# A stack trace is terse. A paragraph that happens to use the word is somebody
+# explaining something, and length is the cheapest way to tell them apart.
+check("and a long paragraph mentioning failure is not machine output",
+      not remote_mod._looks_wrong("There was no failure here, only a long "
+                                  "explanation of what happened and why, "
+                                  "which runs on well past the point where a "
+                                  "stack trace would have stopped, and then "
+                                  "carries on for a while yet."))
+
+
 print("\n--- the card is a verdict, not a transcript ---")
 # Everything an agent says is new, so the diff is the whole reply. The first
 # version put twelve lines of somebody's prose on a phone screen.

@@ -89,14 +89,22 @@ def _esc(text):
     return (str(text).replace("&", "&amp;")
             .replace("<", "&lt;").replace(">", "&gt;"))
 
-# Words that mean a step did not do what it was asked. Kept deliberately short:
-# every addition is another way for an ordinary sentence to be flagged, and a
-# summary that cries wolf gets skimmed and then ignored.
+# Words that mean a step did not do what it was asked.
+#
+# Shorter than it was, and measured rather than guessed. The first list held
+# "cannot", "could not", "not found" and "no such", which are ordinary English:
+# five sentences of normal prose were tried against it and two came back
+# flagged. A card that shows a warning on every reply is a card whose warning
+# means nothing, which is the opposite of what it is for.
 TROUBLE = (
-    "error", "exception", "traceback", "failed", "failure", "cannot",
-    "could not", "denied", "not found", "no such", "fatal", "refused",
-    "eroare", "nu a reusit", "nu s-a putut",
+    "error", "exception", "traceback", "failed", "failure", "fatal",
+    "denied", "refused", "eroare", "esuat",
 )
+
+# And only on a line short enough to be machine output. A stack trace is
+# terse; a paragraph that happens to use the word "failure" is somebody
+# explaining something.
+TROUBLE_MAX_CHARS = 160
 
 # Buttons, labels and chrome that come back with the text of any window and say
 # nothing about what happened.
@@ -110,6 +118,8 @@ CHROME = (
 
 
 def _looks_wrong(line):
+    if len(line) > TROUBLE_MAX_CHARS:
+        return False
     low = line.lower()
     return any(word in low for word in TROUBLE)
 

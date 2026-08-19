@@ -86,25 +86,28 @@ def paste_text(text, config, manage_clipboard=True, target_hwnd=None, submit=Non
         print(f"[paste] could not write to clipboard: {exc}")
         return False
 
-    # Writing the clipboard goes through OLE and isn't instant; pasting
-    # immediately can land before the new contents are visible.
-    time.sleep(config.paste_delay_ms / 1000.0)
-
+    # From here the clipboard is holding our text, so whatever happens next it
+    # has to be handed back. It was not: a Ctrl+V that failed returned early,
+    # and the paragraph you had been carrying was quietly replaced by a phrase
+    # that never went anywhere.
     try:
+        # Writing the clipboard goes through OLE and isn't instant; pasting
+        # immediately can land before the new contents are visible.
+        time.sleep(config.paste_delay_ms / 1000.0)
+
         with _keyboard.pressed(Key.ctrl):
             _keyboard.press("v")
             _keyboard.release("v")
+
+        if config.auto_enter if submit is None else submit:
+            time.sleep(0.05)
+            _keyboard.press(Key.enter)
+            _keyboard.release(Key.enter)
+        return True
     except Exception as exc:
         print(f"[paste] could not send Ctrl+V: {exc}")
         return False
-
-    if config.auto_enter if submit is None else submit:
-        time.sleep(0.05)
-        _keyboard.press(Key.enter)
-        _keyboard.release(Key.enter)
-
-    # Give the target app time to consume the paste before putting the old
-    # clipboard contents back.
-    restore_clipboard(original, config)
-
-    return True
+    finally:
+        # Give the target app time to consume the paste before putting the old
+        # clipboard contents back.
+        restore_clipboard(original, config)

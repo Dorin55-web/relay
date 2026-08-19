@@ -5,10 +5,11 @@ the dots crowd towards the edge the way points on a ball do. Depth is carried
 by brightness and dot size rather than by perspective: the far side is dimmer
 and smaller, which reads as roundness at sizes where perspective would not.
 
-This is the icon only, and an icon never moves. The orb on screen is the sash
-in `ribbon`, which is a different drawing for a different job - the sash was
-tuned at 64 pixels and frozen at 16 it is five hundred sub-pixel dots and no
-shape at all, which is exactly what an icon cannot be.
+This is the icon only, and an icon never moves. The orb on screen is whichever
+of the nine drawings in `orbs` you have chosen, which is a different job - all
+nine are tuned to be seen moving, and frozen at 16 pixels any of them is a few
+hundred sub-pixel dots and no shape at all, which is exactly what an icon
+cannot be.
 """
 
 import math
