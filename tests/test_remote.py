@@ -592,9 +592,9 @@ bot._prompts = ["find the cause"]
 bot._result(0, ["find the cause"] + [f"paragraph number {n} " + "x" * 200
                                      for n in range(20)])
 card = api.card
-check("it is short enough to glance at", len(card) < 1200, str(len(card)))
+check("it is short enough to glance at", len(card) < 1500, str(len(card)))
 check("no line runs past the budget",
-      all(len(ln) < 200 for ln in card.splitlines()),
+      all(len(ln) <= remote_mod.LINE_CHARS for ln in card.splitlines()),
       str(max(len(ln) for ln in card.splitlines())))
 check("and the prompt is not repeated in the output",
       card.count("find the cause") == 1, str(card.count("find the cause")))

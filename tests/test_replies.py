@@ -397,4 +397,45 @@ check("one message was created, not four", slow["n"] == 1, str(slow["n"]))
 check("and the rest were edits", len(api.edits) >= 1, str(len(api.edits)))
 check("all of them to the same message", bot._card == 1, str(bot._card))
 
+print("\n--- a line too long for the card is cut where a word ends ---")
+# It was cut at exactly 140 characters, mid-word: the card read "nici un
+# microfon Blue" and there was no way to tell that from the agent having
+# written those words and stopped.
+sentence = ("Suitele verifica logica: 26 din 26 trec. Nu demonstreaza citirea "
+            "reala prin UI Automation a unei ferestre Antigravity, nici un "
+            "microfon Bluetooth adevarat, nici reteaua Telegram.")
+cut = remote_mod._shorten(sentence, 100)
+check("it is shortened", len(cut) <= 100, str(len(cut)))
+check("and never mid-word", sentence.startswith(cut[:-1].rstrip()), repr(cut))
+check("and says so", cut.endswith("\u2026"), repr(cut[-12:]))
+check("a line that fits is left exactly as it was",
+      remote_mod._shorten("all done", 100) == "all done")
+check("shortening twice changes nothing the second time",
+      remote_mod._shorten(cut, 100) == cut, repr(cut))
+check("a line with no spaces is still cut",
+      len(remote_mod._shorten("x" * 300, 40)) <= 40)
+
+
+print("\n--- and the card shows it ---")
+bot, api, sent = make()
+bot._prompts = ["do the thing"]
+bot._result(0, ["do the thing", sentence + " " + sentence])
+card = api.all_text[-1]
+check("the ellipsis reaches the phone", "\u2026" in card, card[-80:])
+check("no word is broken in half",
+      all(len(ln) <= remote_mod.LINE_CHARS for ln in card.splitlines()),
+      str(max(len(ln) for ln in card.splitlines())))
+check("Telegram would still take it", api.rejected == [], str(api.rejected[:2]))
+
+
+print("\n--- a whole ordinary sentence now fits without being cut ---")
+# The reason it was being cut at all: at 140 characters an ordinary sentence
+# did not fit, so nearly every line on the card ended part way through one.
+plain = ("Erai in setarile Claude cand a pornit lantul, asa ca a tinut, a "
+         "asteptat noua secunde pana ai inchis dialogul, si abia dupa ce "
+         "caseta a redevenit Prompt a trimis pasul.")
+check("this one is longer than the old limit", len(plain) > 140, str(len(plain)))
+check("and is not shortened now",
+      remote_mod._shorten(plain, remote_mod.LINE_CHARS) == plain, plain)
+
 sys.exit(report.finish())

@@ -101,9 +101,12 @@ MAX_TOKEN = 80
 # verdict, not a transcript: the detail is in the window it came from, and
 # anyone who wants it will go and look.
 RESULT_LINES = 5
-RESULT_CHARS = 500
-LINE_CHARS = 140
+RESULT_CHARS = 700
+# A whole sentence, near enough. At 140 an ordinary sentence did not fit, so
+# almost every line on the card ended part way through one.
+LINE_CHARS = 220
 BAD_LINES = 4
+BAD_CHARS = 180
 
 # How many of a batch's prompts to list on the card before summarising the
 # rest. More than a few and the state line is pushed off a phone screen.
@@ -118,6 +121,29 @@ ICON_NEEDS_YOU = "🔔"
 ICON_DONE = "✅"
 ICON_TROUBLE = "⚠️"
 ICON_STOPPED = "⛔"
+
+
+def _shorten(text, limit):
+    """Cut to `limit`, at a space rather than mid-word, and show it was cut.
+
+    Two separate things, and the second matters more. A line that stops in the
+    middle of a word reads as the window having gone quiet there - the card
+    said "nici un microfon Blue" and there was no way to tell that from the
+    agent having actually written that. The ellipsis is the whole difference
+    between "that is all it said" and "there is more where this came from".
+
+    Never longer than `limit`, so passing an already-shortened line through
+    again changes nothing.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        # Only if the last space is somewhere near the end. A line with no
+        # spaces at all - a path, a hash - is better cut short than left whole.
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:-") + "\u2026"
 
 
 def _esc(text):
@@ -216,7 +242,7 @@ def _last_of(lines):
     """
     out, budget = [], RESULT_CHARS
     for line in reversed(lines[-RESULT_LINES:]):
-        line = line[:LINE_CHARS]
+        line = _shorten(line, LINE_CHARS)
         if out and len(line) > budget:
             break
         out.append(line)
@@ -521,16 +547,19 @@ class Remote:
             shown.append(f"...and {len(self._prompts) - CARD_PROMPTS} more")
         if shown:
             blocks.append("<b>Asked</b>\n"
-                          + "\n".join(_esc(p[:CARD_PROMPT_CHARS]) for p in shown))
+                          + "\n".join(_esc(_shorten(p, CARD_PROMPT_CHARS))
+                                        for p in shown))
 
         if self._bad:
             word = "problem" if len(self._bad) == 1 else "problems"
             blocks.append(f"⚠️ <b>{len(self._bad)} {word}</b>\n"
-                          + "\n".join(_esc(ln[:180]) for ln in self._bad))
+                          + "\n".join(_esc(_shorten(ln, BAD_CHARS))
+                                        for ln in self._bad))
 
         if self._tail:
             blocks.append("<b>What it said</b>\n"
-                          + "\n".join(_esc(ln[:180]) for ln in self._tail))
+                          + "\n".join(_esc(_shorten(ln, LINE_CHARS))
+                                        for ln in self._tail))
 
         if self._note:
             blocks.append(_esc(self._note))
