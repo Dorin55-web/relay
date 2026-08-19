@@ -12,6 +12,15 @@ their whole conversation as text, and a conversation can contain anything -
 including a discussion of these very rules. That is not hypothetical. The
 session that produced the Claude profile had the words "Claude is working" and
 "Stop" in its transcript, put there by writing the profile.
+
+The last three groups name no application at all. A measured string can only
+be checked against the application it came out of, and the profile that goes
+wrong is the one written next - so those groups ask instead what has to be
+true of any profile whatever it was written for: that every condition it is
+allowed to use is one the reader actually enforces, that the busy window it
+describes is never also read as finished, and that it says which window on
+screen is its own. A fourth profile is held to all of it on the day it is
+added, without anyone remembering to come back here.
 """
 import sys
 
@@ -132,6 +141,121 @@ check("nor a missing one", not agent._matches(None, "anything", []))
 print("\n--- only idle lets a queue through ---")
 check("the other three all stop it",
       set(agent.STOPS) == {agent.BUSY, agent.WAITING, agent.UNKNOWN})
+
+print("\n--- every condition the tuple lists is one the reader enforces ---")
+# CONDITIONS is what stops a misspelled key: _matches refuses any rule holding
+# a name that is not in it. That only helps while the tuple and the reader
+# agree. A name added to the tuple and never given a branch below is passed
+# over rather than refused, and a condition that is passed over is a condition
+# that always holds - so a rule made of one reads every window on screen as a
+# match. On an idle rule that is "it has finished" whatever is actually there,
+# which is the one direction of being wrong that types over a reply.
+#
+# So each name is asked to do both halves of its job: hold where it should,
+# and refuse where it should not. A name with no branch fails the second half.
+MARK = "zzmarker"
+PRESENT = (f"a line of something else\n{MARK}", [MARK])
+ABSENT = ("a line of something else\nand another", [])
+
+for condition in agent.CONDITIONS:
+    # An `absent_` condition wants the opposite window from the rest.
+    holds, refuses = ((ABSENT, PRESENT) if condition.startswith("absent_")
+                      else (PRESENT, ABSENT))
+    check(f"{condition} holds where it should",
+          agent._matches({condition: MARK}, *holds) is True)
+    check(f"{condition} refuses where it should",
+          agent._matches({condition: MARK}, *refuses) is False)
+
+
+print("\n--- and no profile reads its own busy window as finished ---")
+# Everything above is one application's measured text. This is about the shape
+# of a profile whatever it was written for, so a fourth one added later is held
+# to it without anyone remembering to come back here.
+#
+# A busy rule is a description of the busy window. Build that window from the
+# rule and the profile has to still call it busy - and the idle rule must not
+# match it at all. Two rules that can both be true of one window is a profile
+# that hands the queue a window still working.
+
+
+def window_the_rule_describes(rule):
+    """The window a rule says it is looking at: what it asks to be present.
+
+    Nothing is added for an `absent_` condition, which is the point - what a
+    rule wants gone is simply never put there.
+    """
+    lines, buttons = [], []
+    for condition, wanted in (rule or {}).items():
+        if condition == "text":
+            # Buried in a longer line on purpose: `text` is a fragment rule and
+            # must not be quietly satisfied by the whole-line `line` test.
+            lines.append(f"before {wanted} after")
+        elif condition == "line":
+            lines.append(wanted)
+        elif condition == "button":
+            buttons.append(wanted)
+    return "\n".join(lines), buttons
+
+
+for profile in agent.BUILT_IN:
+    name = profile.get("name")
+
+    text, buttons = window_the_rule_describes(profile.get("busy"))
+    got = state(profile, text, buttons)
+    check(f"{name} still calls its busy window busy", got == agent.BUSY, got)
+    check(f"and {name} does not also call that one finished",
+          not agent._matches(profile.get("idle"), text, buttons))
+
+    text, buttons = window_the_rule_describes(profile.get("idle"))
+    got = state(profile, text, buttons)
+    check(f"{name} still calls its idle window idle", got == agent.IDLE, got)
+
+    if profile.get("waiting"):
+        text, buttons = window_the_rule_describes(profile["waiting"])
+        got = state(profile, text, buttons)
+        check(f"{name} still calls its waiting window waiting",
+              got == agent.WAITING, got)
+
+
+print("\n--- and every profile can say which window is its own ---")
+# profile_for skips the process test when a profile names no process, and
+# _title_matches answers True when it asks for no fragments. A profile naming
+# neither therefore matches the first window Windows hands over - and then
+# recognised_windows offers every window on screen as an agent, and a step is
+# read with rules written for something else entirely. An empty title fragment
+# is the same mistake spelled differently: "" is in every title there is.
+READ_KEYS = {"name", "process", "title_contains", "input",
+             "busy", "idle", "waiting"}
+names = []
+for profile in agent.BUILT_IN:
+    label = profile.get("name") or profile.get("process") or repr(profile)[:20]
+    names.append(profile.get("name"))
+
+    check(f"{label} says what it is called",
+          isinstance(profile.get("name"), str) and bool(profile["name"].strip()),
+          repr(profile.get("name")))
+    check(f"{label} says which window to look at",
+          bool(profile.get("process")) or bool(profile.get("title_contains")))
+
+    wanted = profile.get("title_contains") or []
+    fragments = [wanted] if isinstance(wanted, str) else list(wanted)
+    check(f"{label} asks for no fragment that is in every title",
+          all(str(f).strip() for f in fragments), str(fragments))
+
+    # The near misses are what this is for. `imput` leaves focus_input
+    # answering None, and None is how a terminal is told apart from a window
+    # with a box - so the step is typed blind into a chat window instead.
+    stray = sorted(set(profile) - READ_KEYS)
+    check(f"{label} carries nothing the reader never looks at", not stray,
+          str(stray))
+
+    box = profile.get("input")
+    check(f"{label} names a box or no box at all",
+          box is None or (isinstance(box, str) and bool(box.strip())), repr(box))
+
+check("and no two of them answer to the same name",
+      len(set(names)) == len(names), str(names))
+
 
 print("\n--- the file on disk says what the code says ---")
 # profiles.json is what you edit; BUILT_IN is the fallback. They start life
