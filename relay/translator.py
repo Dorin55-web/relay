@@ -128,7 +128,17 @@ class TextTranslator:
         # by the last clause the earlier sentences have been through the model
         # several times over for the same answer. Only the ones never seen
         # before are sent.
-        fresh = [s for s in dict.fromkeys(payload) if s not in self._cache]
+        #
+        # Held here as well as in the cache, and read back from here. The cache
+        # is a fixed window with the oldest entry falling out of it, so a text
+        # with more sentences than the window holds evicts its own opening
+        # while its ending is still being stored - and reading the answer back
+        # out of the cache then asks for a sentence that is no longer in it.
+        # Which arrived, from the write window, as a KeyError on a paste that
+        # was perfectly valid.
+        answers = {s: self._cache[s] for s in dict.fromkeys(payload)
+                   if s in self._cache}
+        fresh = [s for s in dict.fromkeys(payload) if s not in answers]
         if fresh:
             batch = [self._source.encode(s, out_type=str) + [END_TOKEN]
                      for s in fresh]
@@ -141,12 +151,14 @@ class TextTranslator:
                     max_decoding_length=MAX_DECODING_LENGTH,
                 )
             for sentence, result in zip(fresh, results):
-                self._remember(sentence, self._target.decode(result.hypotheses[0]))
+                english = self._target.decode(result.hypotheses[0])
+                answers[sentence] = english
+                self._remember(sentence, english)
 
         # Sentences rejoin within their line; lines rejoin with the breaks you
         # typed, blank ones included.
         return "\n".join(
-            " ".join(self._cache[s] for s in line) for line in lines
+            " ".join(answers[s] for s in line) for line in lines
         )
 
     def _remember(self, source, english):
