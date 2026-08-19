@@ -125,6 +125,48 @@ def _esc(text):
     return (str(text).replace("&", "&amp;")
             .replace("<", "&lt;").replace(">", "&gt;"))
 
+
+# Telegram takes 4096 characters; this leaves room for the escaping to grow.
+MESSAGE_CHARS = 3900
+
+
+def _fit(text, limit=MESSAGE_CHARS):
+    """Escaped, cut to what Telegram will take, and never cut mid-entity.
+
+    Cutting inside an `&amp;` leaves a bare ampersand at the end, which is the
+    same rejection this exists to avoid.
+    """
+    out = _esc(text)[:limit]
+    last = out.rfind("&")
+    if last != -1 and ";" not in out[last:]:
+        out = out[:last]
+    return out
+
+
+# What Telegram sends when a message is not text. Named, so the reply can say
+# what it was rather than only that it was not readable.
+ATTACHMENTS = (
+    ("photo", "a photo"),
+    ("voice", "a voice message"),
+    ("audio", "an audio file"),
+    ("video", "a video"),
+    ("video_note", "a video message"),
+    ("animation", "a GIF"),
+    ("sticker", "a sticker"),
+    ("document", "a file"),
+    ("location", "a location"),
+    ("contact", "a contact"),
+    ("poll", "a poll"),
+)
+
+
+def _kind_of(message):
+    """What arrived, when what arrived has no text in it."""
+    for key, name in ATTACHMENTS:
+        if message.get(key):
+            return name
+    return "something that is not text"
+
 # Words that mean a step did not do what it was asked.
 #
 # Shorter than it was, and measured rather than guessed. The first list held
@@ -365,6 +407,11 @@ class Remote:
         self._where = ""
         self.pilot = Autopilot(send=send, on_progress=self._progress,
                                on_result=self._result, log=log)
+        # The card is drawn from two threads: this one, when a message
+        # arrives, and the queue's own, once a second while a chain runs. Both
+        # finding it empty at the same moment is two cards on the phone, and
+        # from then on the one being edited is not the one you are looking at.
+        self._drawing = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
         self._offset = 0
@@ -408,11 +455,19 @@ class Remote:
     def chat_id(self):
         return self.settings.get("chat_id")
 
-    def say(self, text, keys=False):
-        """Send a message. Returns its id, so it can be edited later."""
+    def say(self, text, keys=False, html=False):
+        """Send a message. Returns its id, so it can be edited later.
+
+        Escaped on the way out unless the caller has already done it. Nearly
+        everything sent from here carries a window title or the text of an
+        exception, and one angle bracket in a title is a message Telegram
+        refuses outright - which arrives as silence, at the moment you were
+        asking what was going on.
+        """
         if not self.chat_id:
             return None
-        params = {"chat_id": self.chat_id, "text": text[:3900],
+        params = {"chat_id": self.chat_id,
+                  "text": text[:MESSAGE_CHARS] if html else _fit(text),
                   "parse_mode": "HTML"}
         if keys is True:
             params["reply_markup"] = json.dumps(KEYBOARD)
@@ -434,7 +489,8 @@ class Remote:
             self.api(
                 self.settings["token"], "editMessageText",
                 {"chat_id": self.chat_id, "message_id": message_id,
-                 "text": text[:3900], "parse_mode": "HTML"}, timeout=timeout)
+                 "text": text[:MESSAGE_CHARS], "parse_mode": "HTML"},
+                timeout=timeout)
             return True
         except Exception as exc:
             self.log(f"[remote] could not edit: {exc}")
@@ -498,16 +554,17 @@ class Remote:
         if note is not None:
             self._note = note
 
-        text = self._render()
-        if text == self._painted:
-            return
-        self._painted = text
-        if self._card is None:
-            self._card = self.say(text)
-        elif not self.edit(self._card, text):
-            # The message may have been deleted from the phone. Start another
-            # rather than going quiet for the rest of the chain.
-            self._card = self.say(text)
+        with self._drawing:
+            text = self._render()
+            if text == self._painted:
+                return
+            self._painted = text
+            if self._card is None:
+                self._card = self.say(text, html=True)
+            elif not self.edit(self._card, text):
+                # The message may have been deleted from the phone. Start
+                # another rather than going quiet for the rest of the chain.
+                self._card = self.say(text, html=True)
 
     def _new_card(self):
         self._card = None
@@ -545,9 +602,7 @@ class Remote:
         wait = RETRY_START
         while not self._stop.is_set():
             try:
-                for update in self._poll():
-                    self._handle(update)
-                wait = RETRY_START
+                updates = self._poll()
             except Exception as exc:
                 # Offline, asleep, or Telegram having a moment. None of those
                 # deserve a line a second.
@@ -556,7 +611,32 @@ class Remote:
                     return
                 wait = min(wait * 2, RETRY_MAX)
                 continue
-            self._drain()
+            wait = RETRY_START
+
+            for update in updates:
+                try:
+                    self._handle(update)
+                except Exception as exc:
+                    # One message nothing could be done with is not a network
+                    # problem. Counting it as one used to back the poll off to
+                    # a minute between reads, throw away the rest of the batch,
+                    # and say "not reachable" about a laptop that was sitting
+                    # right there. Telegram has already been told these were
+                    # read, so there is no second attempt at them either.
+                    self.log(f"[remote] could not deal with a message: {exc}")
+                    self.say("Something went wrong dealing with that message. "
+                             "It has not been queued.")
+
+            try:
+                self._drain()
+            except Exception as exc:
+                # This used to sit outside the guard entirely, so anything it
+                # raised ended the thread - and a phone link that has stopped
+                # listening looks exactly like one with nothing to say.
+                self.log(f"[remote] could not start the queue: {exc}")
+                self.pending.clear()
+                self._paint(icon=ICON_STOPPED, head="could not start",
+                            note=str(exc))
 
     def _poll(self):
         updates = self.api(
@@ -588,9 +668,9 @@ class Remote:
     def _handle(self, update):
         message = update.get("message") or update.get("edited_message") or {}
         chat = (message.get("chat") or {}).get("id")
-        text = (message.get("text") or "").strip()
-        if not chat or not text:
+        if not chat:
             return
+        text = (message.get("text") or "").strip()
 
         # Anything sent before this process existed was meant for a Relay that
         # was not there, and acting on it now is acting on the past. It matters
@@ -601,10 +681,12 @@ class Remote:
         when = message.get("date")
         if when and float(when) < self._started:
             self.log(f"[remote] ignoring a message from before I started: "
-                     f"{text[:40]!r}")
+                     f"{(text or _kind_of(message))[:40]!r}")
             return
 
         if self.chat_id is None:
+            if not text:
+                return
             self.settings["chat_id"] = int(chat)
             save_chat_id(self.settings, int(chat))
             self.log(f"[remote] paired with chat {chat}")
@@ -617,6 +699,20 @@ class Remote:
         if int(chat) != int(self.chat_id):
             # Somebody else found the bot. Say nothing to them at all.
             self.log(f"[remote] ignored a message from chat {chat}")
+            return
+
+        if not text:
+            # A photo, a voice note, a file. There is nothing here that could
+            # be typed into a window, and answering costs one line - where
+            # saying nothing is indistinguishable from having queued it, and
+            # leaves you waiting for a result that was never coming. The
+            # caption is not used either: a sentence about a picture, sent on
+            # its own to something that cannot see the picture, is worse than
+            # nothing.
+            kind = _kind_of(message)
+            self.log(f"[remote] {kind} from the phone; nothing to type")
+            self.say(f"That came through as {kind}, and I can only read text. "
+                     f"Send what you want typed as a message.")
             return
 
         if text.startswith("/"):
