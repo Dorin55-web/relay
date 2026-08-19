@@ -97,6 +97,13 @@ def load_config(path=None):
         except (json.JSONDecodeError, OSError) as exc:
             print(f"[config] {config_path.name} could not be read ({exc}); using defaults")
             return cfg
+        # Valid JSON is not necessarily a settings file. A list, a bare string
+        # or a null all parse, and every one of them used to take the load down
+        # with a TypeError - at start-up, before there is an orb to show it, so
+        # what you see is the application not coming up at all.
+        if not isinstance(user_values, dict):
+            print(f"[config] {config_path.name} is not a settings object; using defaults")
+            return cfg
         unknown = set(user_values) - set(DEFAULTS)
         if unknown:
             print(f"[config] ignoring unknown key(s): {', '.join(sorted(unknown))}")
@@ -154,8 +161,25 @@ def save_orb(settings, path=None):
         raw = json.loads(config_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raw = {}
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError as exc:
+        # A file we cannot parse is still a file somebody typed. Overwriting it
+        # from the defaults is how a trailing comma turns into every setting
+        # gone: load_config falls back silently, then the first save in the
+        # look picker writes those fallbacks out as though they were chosen.
         raw = {}
+        kept = config_path.with_name(config_path.stem + ".broken" + config_path.suffix)
+        try:
+            kept.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
+            print(f"[config] {config_path.name} is not valid JSON ({exc}); "
+                  f"your version is kept as {kept.name}")
+        except OSError as copy_failed:
+            raise OSError(f"{config_path.name} is not valid JSON and could not "
+                          f"be backed up ({copy_failed}); not overwriting it") from exc
+    except OSError as exc:
+        # Cannot even read it - locked, or not ours. Writing over it would
+        # destroy contents we never saw.
+        raise OSError(f"{config_path.name} could not be read ({exc}); "
+                      f"not overwriting it") from exc
     raw["orb"] = normalise_orb(settings)
     config_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return raw["orb"]

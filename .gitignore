@@ -23,3 +23,7 @@ telegram.json
 # The keeper leaves these behind.
 keeper.log
 .relay-restart
+
+# A copy of a config.json that could not be parsed, kept so an edit that
+# went wrong is recoverable.
+config.broken.json
