@@ -144,6 +144,11 @@ class Autopilot:
         self.profile = profile
         self.title = window_title(hwnd)
         self.index, self.reason = 0, ""
+        # A chain that was stopped part way through leaves its snapshot behind,
+        # and the next chain would then diff against it - reporting the
+        # previous chain's leftovers as the answer to a step it had not sent
+        # yet.
+        self._before = None
         self._stop.clear()
         self._typed.clear()
         self.log(f"[auto] {len(steps)} step(s) into {self.title!r} "
@@ -206,8 +211,13 @@ class Autopilot:
             # which is not what the word means - and the answer to the last
             # step is the one most worth having, especially when the whole
             # chain was one message from a phone.
-            if self._before is not None:
-                self._wait_until_free()
+            #
+            # And if that wait does not come back, the chain did not finish:
+            # the window was closed, or the step ran past the timeout, or you
+            # stopped it. The answer this reported was "done" regardless, which
+            # is the one thing a verdict must never be wrong about.
+            if self._before is not None and not self._wait_until_free():
+                return self._finish(STOPPED, self.reason or "stopped")
             self._finish(DONE, f"all {len(self.steps)} step(s) done")
         except Exception as exc:
             self._finish(STOPPED, f"stopped on an error: {exc}")

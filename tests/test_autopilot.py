@@ -290,4 +290,72 @@ pilot.start(["one"], HWND)
 check("a second start is refused", pilot.start(["two"], HWND) is False)
 pilot.stop("test over")
 
+print("\n--- a chain whose window closes at the last step is not 'done' ---")
+# The verdict on the card is the whole point of it. Reporting done because the
+# steps were all sent, when the last one was never seen to finish, is the one
+# thing that card must not say.
+window = Fake(state=agent.IDLE, on_send=lambda w: setattr(w, "state", agent.BUSY))
+results = []
+pilot = window.pilot(read_text=lambda _h: "before", on_result=lambda i, l: results.append(i))
+pilot.start(["only step"], HWND)
+deadline = time.monotonic() + 2
+while not window.sent and time.monotonic() < deadline:
+    time.sleep(0.01)
+window.alive = False                       # closed while it was working
+deadline = time.monotonic() + 2
+while pilot.running and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("it was sent", window.sent == ["only step"], str(window.sent))
+check("and the chain says stopped, not done", pilot.phase == auto_mod.STOPPED,
+      pilot.phase)
+check("with a reason", "closed" in pilot.reason, pilot.reason)
+
+
+print("\n--- and one that runs to the end is ---")
+window = Fake(state=agent.IDLE, on_send=lambda w: setattr(w, "state", agent.BUSY))
+pilot = window.pilot()
+
+
+def go_idle_again(w):
+    w.state = agent.BUSY
+    threading.Timer(0.15, lambda: setattr(w, "state", agent.IDLE)).start()
+
+
+window.on_send = go_idle_again
+run(pilot, ["one step"], seconds=3)
+check("done", pilot.phase == auto_mod.DONE, pilot.phase)
+
+
+print("\n--- what one chain saw is not reported as the next one's answer ---")
+# The snapshot taken before a step used to survive the chain being stopped, so
+# the next chain reported the previous one's leftovers as its own first result
+# - before it had sent anything at all.
+window = Fake(state=agent.IDLE, on_send=lambda w: setattr(w, "state", agent.BUSY))
+said = ["line one"]
+results = []
+pilot = window.pilot(read_text=lambda _h: "\n".join(said),
+                     on_result=lambda index, lines: results.append((index, lines)))
+pilot.start(["first chain"], HWND)
+deadline = time.monotonic() + 2
+while not window.sent and time.monotonic() < deadline:
+    time.sleep(0.01)
+pilot.stop("you stopped it")
+deadline = time.monotonic() + 2
+while pilot.running and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("nothing was reported for a chain you stopped", results == [], str(results))
+
+said.append("something the first chain said")
+window.state = agent.IDLE
+window.on_send = lambda w: setattr(w, "state", agent.BUSY)
+pilot.start(["second chain"], HWND)
+deadline = time.monotonic() + 2
+while not window.sent[1:] and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("the second chain sent its own step", window.sent[1:] == ["second chain"],
+      str(window.sent))
+check("and reported nothing before it had an answer of its own",
+      results == [], str(results))
+pilot.stop("test over")
+
 sys.exit(report.finish())
