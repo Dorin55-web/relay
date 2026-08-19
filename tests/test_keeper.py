@@ -27,6 +27,7 @@ MINE = 111
 class Api:
     def __init__(self):
         self.sent = []
+        self.markup = []     # what keyboard, if any, went with each message
         self.updates = []
         self.polls = 0
 
@@ -41,6 +42,7 @@ class Api:
             return out
         if method == "sendMessage":
             self.sent.append(params["text"])
+            self.markup.append(params.get("reply_markup"))
             return {"message_id": len(self.sent)}
         raise AssertionError(f"unexpected method {method}")
 
@@ -89,6 +91,23 @@ api.sent.clear()
 watcher.tick()
 check("but not told again", not any("has stopped" in s for s in api.sent),
       str(api.sent))
+
+
+print("\n--- the button leaves with the need for it ---")
+# Telegram keeps the last keyboard until something removes it, so a panel that
+# is merely not resent stays on the screen for ever - which is what happened.
+watcher, api, state = make(alive=True)
+watcher.was_alive = True
+state["up"] = False
+watcher.tick()
+check("offered while Relay is down",
+      any("/start" in (m or "") for m in api.markup), str(api.markup))
+
+api.markup.clear()
+api.feed("/start")
+watcher.tick()
+check("and taken away once it is back",
+      any("remove_keyboard" in (m or "") for m in api.markup), str(api.markup))
 
 
 print("\n--- /start brings it back ---")

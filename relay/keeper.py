@@ -50,13 +50,15 @@ WATCH_SECONDS = 5        # how often to look while Relay is up
 POLL_SECONDS = 25        # how long a message request is held open while it is down
 STARTUP_GRACE = 20       # how long to give it to claim the mutex after starting
 
-# Offered when Relay is down, because /start is then the only thing worth
-# doing. Not persistent: a panel that reopens itself every time it is
-# closed is a panel you end up fighting.
+# Offered while Relay is down, because /start is then the only thing worth
+# doing, and taken away the moment it is back. Telegram keeps the last
+# keyboard it was given until something replaces or removes it, so a panel
+# that is merely stopped from being resent stays on screen for ever.
 KEYBOARD = {
     "keyboard": [["/start", "/status"]],
     "resize_keyboard": True,
 }
+NO_KEYBOARD = {"remove_keyboard": True}
 
 
 def settings():
@@ -133,8 +135,10 @@ class Keeper:
         whether it spoke.
         """
         params = {"chat_id": self.conf["chat_id"], "text": text}
-        if keys:
+        if keys is True:
             params["reply_markup"] = json.dumps(KEYBOARD)
+        elif keys == "remove":
+            params["reply_markup"] = json.dumps(NO_KEYBOARD)
         try:
             self.api(self.conf["token"], "sendMessage", params, timeout=20)
             self.log(f"[keeper] told you: {text.splitlines()[0]}")
@@ -175,7 +179,8 @@ class Keeper:
                 # the moment Relay is up - so without this the instruction that
                 # started Relay is still pending, and Relay is handed it again.
                 self.confirm()
-                self.say(f"Relay is back up. ({why})")
+                # Nothing left to press: Relay answers from here.
+                self.say(f"Relay is back up. ({why})", keys="remove")
                 return True
             time.sleep(1)
         self.say("Relay was started but has not come up. It may be loading the "
@@ -191,7 +196,7 @@ class Keeper:
 
         if alive:
             if self.was_alive is False:
-                self.say("Relay is running again.")
+                self.say("Relay is running again.", keys="remove")
             self.was_alive = True
             return self.watch_seconds
 

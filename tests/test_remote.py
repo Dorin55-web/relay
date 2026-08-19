@@ -433,6 +433,40 @@ check("no card starts with a blank line",
       api.card == api.card.lstrip(), repr(api.card[:40]))
 
 
+print("\n--- the buttons are asked for, never volunteered ---")
+# They arrived attached to every message, sat across half a phone screen, and
+# reopened themselves whenever they were closed. Telegram keeps the last
+# keyboard it was given until something removes it, so not resending is not
+# enough - it has to be taken away.
+bot, api, sent, _ = make()
+markup = []
+real = bot.api
+
+
+def watch(token, method, params, timeout=None):
+    if method == "sendMessage":
+        markup.append(params.get("reply_markup"))
+    return real(token, method, params, timeout)
+
+
+bot.api = watch
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/help",
+                                         "date": bot._started + 1}})
+check("/help brings none up", markup == [None], str(markup))
+
+markup.clear()
+bot._handle({"update_id": 2, "message": {"chat": {"id": MINE}, "text": "/keys",
+                                         "date": bot._started + 1}})
+check("/keys does", markup and "/status" in (markup[0] or ""), str(markup))
+
+markup.clear()
+bot._handle({"update_id": 3,
+             "message": {"chat": {"id": MINE}, "text": "/keys off",
+                         "date": bot._started + 1}})
+check("and /keys off takes them away, rather than just not resending them",
+      markup and "remove_keyboard" in (markup[0] or ""), str(markup))
+
+
 print("\n--- a message from before this Relay existed is not obeyed ---")
 # The belt to the confirm's braces. A /restart left pending at Telegram is
 # handed to the next Relay, which restarts, which is handed it again - and it

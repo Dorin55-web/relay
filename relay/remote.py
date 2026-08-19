@@ -54,6 +54,7 @@ KEYBOARD = {
     "keyboard": [["/status", "/target"], ["/stop", "/restart"]],
     "resize_keyboard": True,
 }
+NO_KEYBOARD = {"remove_keyboard": True}
 
 API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -395,8 +396,10 @@ class Remote:
             return None
         params = {"chat_id": self.chat_id, "text": text[:3900],
                   "parse_mode": "HTML"}
-        if keys:
+        if keys is True:
             params["reply_markup"] = json.dumps(KEYBOARD)
+        elif keys == "remove":
+            params["reply_markup"] = json.dumps(NO_KEYBOARD)
         try:
             result = self.api(
                 self.settings["token"], "sendMessage", params, timeout=20)
@@ -572,7 +575,7 @@ class Remote:
             self.say("Paired. Only this chat can drive the laptop now.\n\n"
                      "Write in Romanian and it goes into the window you were "
                      "last working in, in English. /target chooses the window, "
-                     "/status says what it can see, /stop cancels.", keys=True)
+                     "/status says what it can see, /stop cancels.")
             return
 
         if int(chat) != int(self.chat_id):
@@ -636,6 +639,15 @@ class Remote:
                 self.say("Stopped, and the queue is empty.")
             else:
                 self.say("Nothing was running. The queue is empty.")
+        elif command == "/keys":
+            # Asked for, never volunteered. A panel across half the screen
+            # that you did not put there is one you end up fighting.
+            if len(parts) > 1 and parts[1].lower() in ("off", "hide", "no"):
+                self.say("Buttons hidden. /keys brings them back.",
+                         keys="remove")
+            else:
+                self.say("Here they are. /keys off hides them again.",
+                         keys=True)
         elif command == "/restart":
             self._restart()
         elif command in ("/start", "/help"):
@@ -646,10 +658,10 @@ class Remote:
                      "/target  choose which window to write into\n"
                      "/stop    cancel the queue\n\n"
                      "Start a line with = to send it exactly as typed, without "
-                     "translating.", keys=True)
+                     "translating.")
         else:
-            self.say("I only know /status, /target, /stop, /restart and "
-                     "/help.")
+            self.say("I only know /status, /target, /stop, /restart, /keys "
+                     "and /help.")
 
     def _restart(self):
         """Leave, having asked the keeper to bring us straight back.
