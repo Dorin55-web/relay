@@ -110,6 +110,9 @@ def _clean(entries):
             "label": str(entry.get("label", "") or text).strip(),
             "text": text,
         })
+    if len(out) > MAX_PROMPTS:
+        print(f"[prompts] {len(out)} prompts, and the menu holds "
+              f"{MAX_PROMPTS}; the rest are not shown")
     return out[:MAX_PROMPTS]
 
 
