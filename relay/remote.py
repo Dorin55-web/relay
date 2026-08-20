@@ -599,6 +599,11 @@ class Remote:
         self._full = None
         # How many lines of that were more than MORE_CHARS would hold.
         self._dropped = 0
+        # Set when a step finished but the window could not be read before it.
+        # A third answer, and it has to be: "all of the window" and "none of
+        # it" are both untrue about a step whose before and after cannot be
+        # told apart.
+        self._unreadable = False
         self.pilot = Autopilot(send=send, on_progress=self._progress,
                                on_result=self._result, log=log)
         # The card is drawn from two threads: this one, when a message
@@ -790,6 +795,7 @@ class Remote:
 
     def _new_card(self):
         self._card = None
+        self._unreadable = False
         self._painted = None
         self._icon = ICON_WORKING
         self._head = ""
@@ -1046,6 +1052,11 @@ class Remote:
         transcript pasted into it would be rewritten out from under you at the
         next poll.
         """
+        if getattr(self, "_unreadable", False):
+            self.say("The window could not be read before that step, so there "
+                     "is no way to tell what it added. Look at the window, or "
+                     "send the prompt again now that it is up.")
+            return
         if self._full is None:
             self.say("Nothing has finished yet, so there is nothing more to "
                      "show. Send a prompt, and /more gives you the whole of "
@@ -1401,6 +1412,17 @@ class Remote:
         being answered is "did that work", and an error twenty lines up is the
         answer even when the last line looks calm.
         """
+        if new_lines is None:
+            # The queue could not read the window before the step, so it cannot
+            # say what came after. Saying nothing appeared would be a different
+            # untruth from saying all of it did.
+            self._full, self._dropped, self._unreadable = None, 0, True
+            self._paint(note="The window could not be read before this step, so "
+                             "there is no telling what in it is new. Whatever it "
+                             "said is in the window itself.")
+            return
+
+        self._unreadable = False
         asked = {p.strip() for p in self._prompts}
         lines = [ln for ln in new_lines
                  if len(ln) > 1 and not _is_chrome(ln) and ln.strip() not in asked]
@@ -1414,8 +1436,11 @@ class Remote:
             self._paint(note="Nothing new appeared in the window - it may have "
                              "answered somewhere this cannot see.")
             return
+        # The note is cleared with it. A step that could not be read leaves one
+        # behind saying so, and left standing under a result that did read
+        # cleanly the card says both things at once.
         self._paint(bad=[ln for ln in lines if _looks_wrong(ln)][:BAD_LINES],
-                    tail=_last_of(lines))
+                    tail=_last_of(lines), note="")
 
     def _progress(self, phase, index, total, seconds_left):
         """Called from the queue's thread, once a second. Rewrites the card.

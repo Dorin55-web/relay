@@ -240,6 +240,18 @@ class Autopilot:
             was = {ln.strip() for ln in before.splitlines() if ln.strip()}
             now = [ln.strip() for ln in self.read_text(self.hwnd).splitlines()
                    if ln.strip()]
+            if not was and now:
+                # The window could not be read before the step - a cold
+                # accessibility tree, a repaint caught halfway - and against
+                # nothing every line on screen counts as new. What went to the
+                # phone then was the whole window: minutes of unrelated work
+                # from earlier in the session, reported as the answer to the
+                # prompt just sent, with any line in it containing the word
+                # "failed" lifted out as a problem. None says so instead.
+                self.log("[auto] the window could not be read before the step; "
+                         "there is no telling what is new")
+                self.on_result(index, None)
+                return
             self.on_result(index, [ln for ln in now if ln not in was])
         except Exception as exc:
             self.log(f"[auto] could not read the result: {exc}")

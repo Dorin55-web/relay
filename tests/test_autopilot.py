@@ -358,4 +358,75 @@ check("and reported nothing before it had an answer of its own",
       results == [], str(results))
 pilot.stop("test over")
 
+print("\n--- a window that could not be read before the step reports nothing ---")
+# Measured, on a real send: the reading taken before the step came back empty,
+# so every line already on screen counted as new, and the phone was handed
+# minutes of unrelated work from earlier in the session as the answer to the
+# prompt just sent - with any line in it containing the word "failed" lifted
+# out as a problem.
+window = Fake(state=agent.IDLE, on_send=lambda w: setattr(w, "state", agent.BUSY))
+screen = {"text": ""}          # the reading before the step fails
+results = []
+pilot = window.pilot(read_text=lambda _h: screen["text"],
+                     on_result=lambda index, lines: results.append((index, lines)))
+
+
+def then_readable(w):
+    w.state = agent.BUSY
+    screen["text"] = "\n".join(f"a line of older work {n}" for n in range(40))
+    threading.Timer(0.15, lambda: setattr(w, "state", agent.IDLE)).start()
+
+
+window.on_send = then_readable
+run(pilot, ["do the thing"], seconds=4)
+check("the step was sent", window.sent == ["do the thing"], str(window.sent))
+check("and one result came back", len(results) == 1, str(results))
+if results:
+    check("saying it cannot tell, rather than naming the whole window",
+          results[0][1] is None, str(results[0][1])[:120])
+
+
+print("\n--- and one that could is diffed as before ---")
+window = Fake(state=agent.IDLE, on_send=lambda w: setattr(w, "state", agent.BUSY))
+screen = {"text": "what was already there"}
+results = []
+pilot = window.pilot(read_text=lambda _h: screen["text"],
+                     on_result=lambda index, lines: results.append((index, lines)))
+
+
+def then_answers(w):
+    w.state = agent.BUSY
+    screen["text"] = "what was already there\nand what it said back"
+    threading.Timer(0.15, lambda: setattr(w, "state", agent.IDLE)).start()
+
+
+window.on_send = then_answers
+run(pilot, ["do the thing"], seconds=4)
+check("only the new line", results and results[0][1] == ["and what it said back"],
+      str(results))
+
+
+print("\n--- one glance at an idle window is not a finished step ---")
+# An agent running a tool of its own puts the composer back to its idle face
+# for a second or two at a time. Two readings landed inside that gap and called
+# a reply finished thirty seconds into it.
+window = Fake(state=agent.IDLE,
+              on_send=lambda w: setattr(w, "state", agent.BUSY))
+pilot = window.pilot()
+pilot.start(["first", "second"], HWND)
+deadline = time.monotonic() + 3
+while not window.sent and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("the first step went out", window.sent == ["first"], str(window.sent))
+
+# It flickers idle for fewer readings than it takes, then goes back to work.
+for _ in range(auto_mod.SETTLE_POLLS - 1):
+    window.state = agent.IDLE
+    time.sleep(pilot.poll_seconds * 1.2)
+window.state = agent.BUSY
+time.sleep(pilot.poll_seconds * 3)
+check("and the second did not follow it into the gap", window.sent == ["first"],
+      str(window.sent))
+pilot.stop("test over")
+
 sys.exit(report.finish())

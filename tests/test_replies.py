@@ -957,4 +957,34 @@ check("and it does not sit there for ever", later_mod.load() == [],
       str(later_mod.load()))
 later_mod.save([])
 
+print("\n--- when the window could not be read before the step ---")
+# The card is a verdict, and there are three of them, not two: what it said,
+# nothing, and no way to tell. Reported as the first, the phone was handed the
+# whole window - minutes of older work, with the word "failed" somewhere in it.
+bot, api, sent = make()
+bot._prompts = ["do the thing"]
+bot._result(0, None)
+card = api.all_text[-1]
+check("the card says so", "could not be read" in card, card[:120])
+check("it does not claim the window said nothing",
+      "Nothing new appeared" not in card, card[:120])
+check("Telegram would take it", api.rejected == [], str(api.rejected[:2]))
+
+api.feed(text="/more")
+handle(bot, api)
+check("and /more says the same rather than 'nothing yet'",
+      any("no way to tell" in s for s in api.sent), str(api.sent[-1:]))
+
+# And the next step, read properly, is reported properly again.
+bot._result(1, ["what it actually said this time"])
+check("the one after it is a result again",
+      any("what it actually said this time" in t for t in api.all_text),
+      str(api.all_text[-1:])[:140])
+check("and the card does not still say it could not be read",
+      "could not be read" not in api.all_text[-1], api.all_text[-1][:160])
+api.feed(text="/more")
+handle(bot, api)
+check("and /more has it", any("what it actually said this time" in s
+                             for s in api.sent), str(api.sent[-1:])[:140])
+
 sys.exit(report.finish())
