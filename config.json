@@ -6,6 +6,7 @@
   "source_language": "ro",
   "task": "translate",
   "beam_size": 1,
+  "vocabulary": [],
   "input_device": null,
   "sample_rate": 16000,
   "max_recording_seconds": 120,

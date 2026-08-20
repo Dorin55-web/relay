@@ -4,7 +4,7 @@
 python tests/run.py
 ```
 
-Runs all twenty-six suites, each in its own process, and prints a line per
+Runs all twenty-seven suites, each in its own process, and prints a line per
 suite. About a minute for the lot.
 Exit code is non-zero if any failed. To run a few:
 
@@ -48,6 +48,7 @@ the window manager, not for a mock.
 | `test_replies.py` | What the bot sends back, read the way Telegram reads it. A window called `main.py <2>` was enough to have a message refused outright, and the failure is silence on the phone at the moment you asked what was happening. Also that a photo gets an answer rather than being swallowed, and that one message nothing can be done with does not deafen the link | 1 s |
 | `test_startup.py` | The single-instance mutex, with a real second process — because there is no other way to check that a handle disappears when a process dies. That a second copy is refused, that the name is free the instant the holder is killed, and that the keeper is watching that same name: nothing but the string connects them | 1 s |
 | `test_imports.py` | Every module loading, and every name reached across a module boundary still being where its caller looks for it. Most of Relay is imported the moment it is needed, so a misspelled name in the look picker is not a start-up error — it is a menu item that does nothing, weeks later | 2 s |
+| `test_vocabulary.py` | The words Whisper is told to expect. Whether they make it hear *Antigravity* rather than *anti-gravity* needs a person and a microphone and is not checked here; everything the setting must not cost is. An empty one leaves the call as it was to the argument, the warm-up never gets one, a list too long for Whisper's prompt slot is cut with a word about it instead of having its front dropped in silence, and the whole list read back is not pasted into the box you were dictating into | 2 s |
 
 `test_compose.py` needs the Marian translation model. The first run downloads
 it; later ones are fast. `test_bluetooth.py` opens real audio devices.

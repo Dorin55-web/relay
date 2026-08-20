@@ -18,6 +18,15 @@ DEFAULTS = {
     # 1 = greedy. On the short phrases streaming produces, beam search costs
     # decode time for almost no quality gain.
     "beam_size": 1,
+    # Names Whisper keeps getting wrong, handed to it as `initial_prompt`. The
+    # words dictated most here are the tools being worked on - Antigravity,
+    # opencode, autopilot - and those are rare in Romanian speech, so the model
+    # substitutes something it has heard before. A list of words, though a
+    # comma-separated string is taken too. Empty by default: this is context
+    # prepended to the decoder rather than a filter, so a wrong or over-long
+    # one makes the output worse, and nobody gets that unasked. transcriber.py
+    # holds the length limit and says what happens past it.
+    "vocabulary": [],
     # --- audio ---
     "input_device": None,            # null = follow the current Windows default
     # A Bluetooth headset carries its mic on the hands-free profile, which
