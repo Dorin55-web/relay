@@ -58,6 +58,8 @@ class Api:
         self.sent = []
         self.edits = []
         self.messages = {}
+        self.photos = []        # every sendPhoto, as (params, caption)
+        self.published = None   # the command list it registered
         self.rejected = []      # everything Telegram would have thrown out
 
     @property
@@ -81,7 +83,15 @@ class Api:
             out, self.updates = self.updates, []
             return out
         if method == "setMyCommands":
+            self.published = json.loads(params["commands"])
             return True
+        if method == "sendPhoto":
+            # A caption is parsed as HTML exactly like a message, and a
+            # caption Telegram refuses does not arrive without its picture -
+            # it takes the picture with it.
+            self._check(params.get("caption", ""))
+            self.photos.append(params)
+            return {"message_id": 900 + len(self.photos)}
         if method == "sendMessage":
             self._check(params["text"])
             self.sent.append(params["text"])
@@ -95,7 +105,7 @@ class Api:
         raise AssertionError(f"unexpected method {method}")
 
 
-def make(chat_id=MINE, translate=None):
+def make(chat_id=MINE, translate=None, capture=None, target=HWND):
     tmp = Path(tempfile.mkdtemp(prefix="relay-replies-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -104,11 +114,14 @@ def make(chat_id=MINE, translate=None):
     bot = Remote(
         settings={"token": "t", "chat_id": chat_id, "path": path},
         send=lambda text, hwnd: (sent.append(text) or True),
-        target_getter=lambda: HWND,
+        target_getter=lambda: target,
         log=lambda *_: None,
         api=api,
         is_window=lambda _h: True,
         translate=translate,
+        # Standing in for the hop onto the GUI thread. What it hands back is
+        # the shape the real one does: the bytes, or why there are none.
+        capture=capture,
     )
     bot.pilot.read_state = lambda _h: agent.IDLE
     bot.pilot.is_window = lambda _h: True
@@ -249,12 +262,13 @@ print("\n--- every reply the bot can give ---")
 # The whole command surface in one pass, checked as it goes out.
 agent.recognised_windows = lambda: [(HWND, "Some Window", {"name": "fake"})]
 bot, api, sent = make()
-for message in ["/start", "/help", "/status", "/more", "/target", "/target 1",
+for message in ["/start", "/help", "/status", "/more", "/shot",
+                "/target", "/target 1",
                 "/target 0", "/target 99", "/keys", "/keys off", "/stop",
                 "/restart", "/nonsense", "/", "salut"]:
     api.feed(text=message)
 handle(bot, api)
-check("each one was answered", len(api.sent) >= 14, str(len(api.sent)))
+check("each one was answered", len(api.sent) >= 16, str(len(api.sent)))
 check("and Telegram would take all of them", api.rejected == [],
       str(api.rejected[:3]))
 
@@ -616,5 +630,209 @@ check("and the answer to one it does not know lists it too",
 check("along with every other one there is",
       all(f"/{name}" in api.sent[-1] for name, _what in remote_mod.COMMANDS),
       api.sent[-1])
+
+print("\n--- a picture of the window, when you ask for one ---")
+# The card after a step is a diff of what the window said, read through a
+# profile. This is the window itself, which is the answer to "did that work"
+# for the ones whose profiles read them poorly.
+PICTURE = b"\x89PNG\r\n\x1a\n" + b"not really a window, but bytes are bytes" * 8
+
+asked = []
+bot, api, sent = make(capture=lambda hwnd: (asked.append(hwnd) or (PICTURE, None)))
+remote_mod.foreground_window = lambda: HWND
+api.feed(text="/shot")
+handle(bot, api)
+check("a photo went out", len(api.photos) == 1, str(len(api.photos)))
+check("of the window the queue would write into", asked == [HWND], str(asked))
+if api.photos:
+    photo = api.photos[0]
+    check("as a file rather than a line of text",
+          isinstance(photo["photo"], tuple), str(type(photo["photo"])))
+    check("carrying every byte it was given",
+          photo["photo"][1] == PICTURE, str(len(photo["photo"][1])))
+    check("to the paired chat and nowhere else",
+          photo["chat_id"] == MINE, str(photo["chat_id"]))
+    check("with a caption saying what you are looking at",
+          "Some Window" in photo["caption"], photo["caption"])
+check("nothing was queued to be typed", not bot.pending and sent == [],
+      f"{list(bot.pending)} {sent}")
+check("and Telegram would take the caption", api.rejected == [],
+      str(api.rejected[:2]))
+
+
+print("\n--- and a window whose name is markup is still safe under one ---")
+# The same failure as a message, with more at stake: a caption Telegram
+# refuses does not arrive without its picture, it takes the picture with it.
+for title in ("main.py <2> - opencode", "Reports & Figures - Claude"):
+    remote_mod.window_title = lambda hwnd, t=title: t
+    bot, api, sent = make(capture=lambda hwnd: (PICTURE, None))
+    api.feed(text="/shot")
+    handle(bot, api)
+    check(f"{title[:24]!r} is captioned", len(api.photos) == 1, str(api.photos))
+    check("and Telegram would take it", api.rejected == [], str(api.rejected[:2]))
+
+remote_mod.window_title = lambda hwnd: "Some Window"
+
+
+print("\n--- it is never sent unless you ask ---")
+# An automatic screenshot is a few hundred kilobytes through Telegram every
+# step, for something usually not looked at.
+bot, api, sent = make(capture=lambda hwnd: (PICTURE, None))
+api.feed(text="=do a thing")
+handle(bot, api)
+bot._prompts = ["do a thing"]
+bot._result(0, ["all three tests pass"])
+bot._progress(remote_mod.DONE, 0, 1, None)
+check("a whole step comes and goes with no photo", api.photos == [],
+      str(len(api.photos)))
+check("the card still arrived", "done" in api.all_text[-1], api.all_text[-1][:60])
+
+
+print("\n--- and when there is no picture to be had, it says why ---")
+# Three ways for it to come to nothing, and silence would be the worst answer
+# to any of them: from another room there is no telling it from a slow upload.
+for why, expect in [
+        ("it is minimised, so there is nothing on screen to see", "minimised"),
+        ("that window has closed", "closed"),
+        ("the window thread did not answer within 8 seconds", "did not answer")]:
+    bot, api, sent = make(capture=lambda hwnd, w=why: (None, w))
+    api.feed(text="/shot")
+    handle(bot, api)
+    check(f"{expect!r} is passed on", any(expect in s for s in api.sent),
+          str(api.sent))
+    check("and no photo pretends otherwise", api.photos == [], str(api.photos))
+
+bot, api, sent = make(capture=lambda hwnd: (PICTURE, None), target=None)
+api.feed(text="/shot")
+handle(bot, api)
+check("no target at all is answered too",
+      any("Nothing to photograph" in s for s in api.sent), str(api.sent))
+check("with no photo", api.photos == [], str(api.photos))
+
+# --no-ui: there is no orb, so there is no thread allowed to grab anything.
+bot, api, sent = make()
+api.feed(text="/shot")
+handle(bot, api)
+check("and so is a Relay with no window thread",
+      any("without the window thread" in s for s in api.sent), str(api.sent))
+
+
+print("\n--- a window that was behind something says so ---")
+# The whole desktop is what gets grabbed - a GPU-composited window hands back
+# a black device context - so anything on top of it is in the picture. Without
+# a word about that, the photo reads as the wrong window.
+remote_mod.foreground_window = lambda: 777
+bot, api, sent = make(capture=lambda hwnd: (PICTURE, None))
+api.feed(text="/shot")
+handle(bot, api)
+check("the caption warns you",
+      api.photos and "not the window in front" in api.photos[0]["caption"],
+      str(api.photos[:1])[:120])
+
+remote_mod.foreground_window = lambda: HWND
+bot, api, sent = make(capture=lambda hwnd: (PICTURE, None))
+api.feed(text="/shot")
+handle(bot, api)
+check("and does not when it was in front",
+      api.photos and "not the window in front" not in api.photos[0]["caption"],
+      str(api.photos[:1])[:120])
+
+
+print("\n--- one list of commands, and /shot is on it ---")
+# Two copies of this list had already drifted - the help text was offering
+# three commands when there were six - so a new one has to reach the menu
+# Telegram shows, the help text, and the answer to a command that is not there.
+bot, api, sent = make()
+bot.publish_commands()
+check("the menu Telegram publishes has it",
+      any(c["command"] == "shot" for c in api.published or []),
+      str(api.published))
+api.feed(text="/help")
+api.feed(text="/nonsense")
+handle(bot, api)
+check("the help text has it", any("/shot" in s for s in api.sent), str(api.sent))
+check("and so does the answer to one it does not know",
+      any("only know" in s and "/shot" in s for s in api.sent), str(api.sent))
+
+
+print("\n--- the bytes leave as a form with a file in it ---")
+# sendPhoto is not sendMessage: Telegram takes a picture only as
+# multipart/form-data, which is the one shape urlencode cannot make. Anything
+# else must still go the way it always did.
+type_a, body_a = remote_mod._multipart(
+    {"chat_id": 5, "caption": "sesiune terminata", "photo": ("window.png", PICTURE)})
+check("the type names a boundary", "boundary=" in type_a, type_a)
+boundary = type_a.split("boundary=")[1]
+check("with one part in it for each field given",
+      body_a.count(f"--{boundary}\r\n".encode()) == 3,
+      str(body_a.count(f"--{boundary}\r\n".encode())))
+check("the picture is in there whole", PICTURE in body_a, str(len(body_a)))
+check("under a name Telegram can read",
+      b'name="photo"; filename="window.png"' in body_a, str(body_a[:200]))
+check("and the plain fields with it",
+      b"sesiune terminata" in body_a and b"chat_id" in body_a, str(body_a[:200]))
+check("it ends the way a form must", body_a.endswith(f"--{boundary}--\r\n".encode()),
+      str(body_a[-40:]))
+
+# A fixed marker eventually turns up inside a screenshot, and a body whose
+# boundary appears in its own payload is a body that ends early.
+type_b, _ = remote_mod._multipart({"photo": ("window.png", PICTURE)})
+check("and no two calls share a boundary", type_a != type_b, f"{type_a} {type_b}")
+
+diacritics = remote_mod._multipart({"caption": "ferestra a raspuns și a stat"})[1]
+check("a caption is sent as UTF-8, not mangled",
+      "ș".encode("utf-8") in diacritics, str(diacritics))
+
+
+print("\n--- and the same one call still sends everything else ---")
+# The photo had to fit the api callable already there, injected as
+# (token, method, params, timeout). A second callable beside it would be a
+# second thing every caller and every test has to know about.
+requests = []
+
+
+class Answered:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return json.dumps({"ok": True, "result": {"message_id": 1}}).encode()
+
+
+def fake_urlopen(request, timeout=None):
+    requests.append(request)
+    return Answered()
+
+
+import urllib.request as urllib_request  # noqa: E402
+
+real_urlopen = urllib_request.urlopen
+urllib_request.urlopen = fake_urlopen
+try:
+    remote_mod.call_api("tok", "sendMessage", {"chat_id": 1, "text": "hello"})
+    remote_mod.call_api("tok", "sendPhoto",
+                        {"chat_id": 1, "photo": ("window.png", PICTURE)})
+finally:
+    urllib_request.urlopen = real_urlopen
+
+check("both calls went out", len(requests) == 2, str(len(requests)))
+if len(requests) == 2:
+    plain, photo = requests
+    check("a message is still a plain form",
+          (plain.get_header("Content-type") or "").find("multipart") == -1,
+          str(plain.get_header("Content-type")))
+    check("with its text urlencoded as before", b"text=hello" in plain.data,
+          str(plain.data))
+    check("a photo is multipart",
+          "multipart/form-data" in (photo.get_header("Content-type") or ""),
+          str(photo.get_header("Content-type")))
+    check("carrying the picture itself", PICTURE in photo.data, str(len(photo.data)))
+    check("and each to its own Telegram method",
+          plain.full_url.endswith("/sendMessage")
+          and photo.full_url.endswith("/sendPhoto"),
+          f"{plain.full_url[-20:]} {photo.full_url[-20:]}")
 
 sys.exit(report.finish())

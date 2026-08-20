@@ -580,6 +580,21 @@ class VoicePrompt:
 
         QTimer.singleShot(0, self.orb, self.orb.quit)
 
+    def _capture_window(self, hwnd):
+        """Photograph another window, for the phone. Returns (bytes, why not).
+
+        Called from the phone's own thread, and handed over rather than done
+        there for the same reason request_quit is: Qt will not grab a picture
+        from any thread but the one its windows live on, and only this class
+        knows which object is on it.
+        """
+        if self.orb is None:
+            return None, ("Relay is running without its orb, so there is no "
+                          "window thread to take a picture from")
+        from . import shot
+
+        return shot.capture_on(self.orb, hwnd)
+
     def _to_english(self, text):
         """Romanian in, English out, for a prompt arriving from the phone.
 
@@ -624,6 +639,9 @@ class VoicePrompt:
                 # something else is watching for the gap, so this is
                 # handed over rather than assumed.
                 on_restart=self.request_quit,
+                # /shot. The same hop as on_restart: work that only the
+                # thread owning the windows may do.
+                capture=self._capture_window,
             ).start()
         except Exception as exc:
             self.feedback.error(f"could not start the phone link: {exc}")

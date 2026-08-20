@@ -54,6 +54,49 @@ def window_rect(hwnd):
     return rect.left, rect.top, rect.right, rect.bottom
 
 
+class _MONITORINFOEXW(ctypes.Structure):
+    # cbSize has to be filled in before the call: it is how GetMonitorInfoW
+    # tells this structure from the shorter one that has no device name on it.
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", _RECT), ("rcWork", _RECT),
+                ("dwFlags", wt.DWORD), ("szDevice", ctypes.c_wchar * 32)]
+
+
+MONITOR_DEFAULTTONEAREST = 2
+
+
+def monitor_rect(hwnd):
+    """The screen a window is on: its name, and its bounds in real pixels.
+
+    Both halves are needed to say where a window is in the coordinates Qt
+    speaks, which is what taking a picture of one requires. Qt anchors each
+    screen's logical origin to that screen's physical origin, so a conversion
+    that does not know where the monitor begins is only right on the primary
+    one. The name - `\\\\.\\DISPLAY1` - is what pairs it back with the QScreen
+    that reports the same name.
+
+    Returns (name, (left, top, right, bottom)), or None.
+    """
+    user32 = _u32()
+    # Named types, unlike everywhere else in this file, and for a reason: a
+    # monitor handle is a pointer, and ctypes assumes a function returns a
+    # C int. On 64-bit Windows that truncates it, and the truncated handle
+    # is rejected by the next call - so every window would look as though it
+    # were on no screen at all.
+    user32.MonitorFromWindow.restype = wt.HANDLE
+    user32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+    user32.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.c_void_p]
+
+    handle = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+    if not handle:
+        return None
+    info = _MONITORINFOEXW()
+    info.cbSize = ctypes.sizeof(_MONITORINFOEXW)
+    if not user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+        return None
+    bounds = info.rcMonitor
+    return info.szDevice, (bounds.left, bounds.top, bounds.right, bounds.bottom)
+
+
 def window_class(hwnd):
     try:
         buffer = ctypes.create_unicode_buffer(256)

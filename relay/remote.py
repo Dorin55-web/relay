@@ -25,13 +25,14 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from collections import deque
 from pathlib import Path
 
 from . import agent
 from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
                         STARTING, STOPPED, WAITING)
-from .target import window_title
+from .target import foreground_window, window_title
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -67,6 +68,7 @@ NO_KEYBOARD = {"remove_keyboard": True}
 COMMANDS = (
     ("status", "What it can see right now"),
     ("more", "The whole of the last result, not just the card"),
+    ("shot", "A picture of the window"),
     ("target", "Choose which window to write into"),
     ("stop", "Cancel the queue"),
     ("restart", "Quit and come straight back"),
@@ -75,12 +77,31 @@ COMMANDS = (
     ("help", "This list"),
 )
 
+
+def _known():
+    """The commands as a sentence, for the reply to one that is not there.
+
+    The third place this list was written out by hand, and the two before it
+    had both fallen behind. A command missing from here is answered with "I
+    only know" a list that does not contain it, which reads as the bot being
+    broken rather than as this line being stale.
+    """
+    names = [f"/{name}" for name, _ in COMMANDS]
+    return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+
 API = "https://api.telegram.org/bot{token}/{method}"
 
 # Telegram holds the request open until something arrives or this many seconds
 # pass, so an idle bot costs one connection rather than a request a second.
 POLL_SECONDS = 30
 HTTP_TIMEOUT = POLL_SECONDS + 15
+
+# A picture is an upload rather than a line of text, and Telegram does not
+# answer until the last byte of it is in. Half a megabyte on a laptop's uplink
+# is not twenty seconds' work, and a timeout here loses a photograph that was
+# most of the way there.
+PHOTO_TIMEOUT = 90
 
 # After a failure, wait before trying again, and wait longer each time. A
 # laptop that closes its lid on a train should not fill the log with one line
@@ -170,6 +191,10 @@ def _esc(text):
 
 # Telegram takes 4096 characters; this leaves room for the escaping to grow.
 MESSAGE_CHARS = 3900
+
+# The line under a picture is held to a quarter of that by Telegram - 1024 -
+# and a caption it refuses takes the picture down with it.
+CAPTION_CHARS = 900
 
 
 def _fit(text, limit=MESSAGE_CHARS):
@@ -464,11 +489,51 @@ def set_token(path=None, ask=None):
     return True
 
 
+def _multipart(params):
+    """The same call, as a form with a file in it. Returns (type, body).
+
+    Telegram takes a photograph only as multipart/form-data, which is the one
+    shape urlencode cannot make. The boundary is random because it must not
+    occur anywhere in the body, and the body here is a screenshot - arbitrary
+    bytes, in which any fixed marker eventually appears.
+    """
+    boundary = "relay" + uuid.uuid4().hex
+    body = bytearray()
+    for key, value in params.items():
+        body += f"--{boundary}\r\n".encode("utf-8")
+        if isinstance(value, tuple):
+            filename, blob = value
+            body += (f'Content-Disposition: form-data; name="{key}"; '
+                     f'filename="{filename}"\r\n'
+                     f"Content-Type: application/octet-stream\r\n\r\n"
+                     ).encode("utf-8")
+            body += blob
+        else:
+            body += (f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                     ).encode("utf-8")
+            body += str(value).encode("utf-8")
+        body += b"\r\n"
+    body += f"--{boundary}--\r\n".encode("utf-8")
+    return f"multipart/form-data; boundary={boundary}", bytes(body)
+
+
 def call_api(token, method, params, timeout=HTTP_TIMEOUT):
-    """One Telegram API call. Returns the result field, or raises."""
+    """One Telegram API call. Returns the result field, or raises.
+
+    A parameter whose value is a (filename, bytes) pair sends the call as
+    multipart instead of as an ordinary form, which is how a photograph goes
+    out. Keeping it inside this one function rather than adding a second
+    callable next to it means every caller - and every test standing in for
+    this - still has one thing of one shape to deal with.
+    """
     url = API.format(token=token, method=method)
-    data = urllib.parse.urlencode(params).encode("utf-8")
-    request = urllib.request.Request(url, data=data)
+    if any(isinstance(value, tuple) for value in params.values()):
+        content_type, data = _multipart(params)
+        request = urllib.request.Request(
+            url, data=data, headers={"Content-Type": content_type})
+    else:
+        data = urllib.parse.urlencode(params).encode("utf-8")
+        request = urllib.request.Request(url, data=data)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not payload.get("ok"):
@@ -488,7 +553,7 @@ class Remote:
 
     def __init__(self, settings, send, target_getter, log=print,
                  api=call_api, is_window=None, translate=None,
-                 on_restart=None):
+                 on_restart=None, capture=None):
         self.settings = settings
         self.target_getter = target_getter
         # Injected for the same reason the queue injects it: whether a
@@ -509,6 +574,12 @@ class Remote:
         # How to leave, when asked to. None means nobody is watching for
         # the gap, so /restart refuses rather than switching the lights off.
         self.on_restart = on_restart
+        # How to photograph a window. Handed in for the same reason leaving is:
+        # a grab is a Qt call and Qt takes one only from the thread that owns
+        # the windows, which is not this one. None means nobody here can take a
+        # picture at all - Relay started with --no-ui - and /shot says so
+        # rather than going quiet.
+        self.capture = capture
         # The one message a batch of prompts lives in. Set up in one place
         # rather than two: the first version listed these fields here as well
         # as in _new_card, and adding one to a card layout left the other
@@ -600,6 +671,31 @@ class Remote:
             return (result or {}).get("message_id")
         except Exception as exc:
             self.log(f"[remote] could not reply: {exc}")
+            return None
+
+    def send_photo(self, blob, caption=""):
+        """Send a picture with a line under it. Returns its id, or None.
+
+        The caption is escaped and cut exactly as a message is, and for the
+        same reason with more at stake: it carries a window title, titles carry
+        angle brackets and ampersands, and a caption Telegram refuses does not
+        arrive without its photograph - it takes the photograph with it.
+        """
+        if not self.chat_id:
+            return None
+        params = {"chat_id": self.chat_id,
+                  # A (name, bytes) pair is what turns this into a multipart
+                  # call. See call_api.
+                  "photo": ("window.png", blob),
+                  "caption": _fit(caption, CAPTION_CHARS),
+                  "parse_mode": "HTML"}
+        try:
+            result = self.api(self.settings["token"], "sendPhoto", params,
+                              timeout=PHOTO_TIMEOUT)
+            return (result or {}).get("message_id")
+        except Exception as exc:
+            self.log(f"[remote] could not send the picture: {exc}")
+            self.say(f"The picture was taken but would not send ({exc}).")
             return None
 
     def edit(self, message_id, text, timeout=20):
@@ -888,6 +984,8 @@ class Remote:
             self.say(self._describe())
         elif command == "/more":
             self._more()
+        elif command == "/shot":
+            self._shot()
         elif command == "/target":
             self._target_command(parts[1] if len(parts) > 1 else None)
         elif command == "/stop":
@@ -923,11 +1021,7 @@ class Remote:
                      "\n\nStart a line with = to send it exactly as typed, "
                      "without translating.")
         else:
-            # From COMMANDS as well. This sentence was a third copy of the
-            # list, written out by hand, and the two that were written out by
-            # hand are the two that have gone stale.
-            known = ", ".join(f"/{name}" for name, _what in COMMANDS[:-1])
-            self.say(f"I only know {known} and /{COMMANDS[-1][0]}.")
+            self.say(f"I only know {_known()}.")
 
     def _more(self):
         """The whole of the last result, in as many messages as that takes.
@@ -966,6 +1060,49 @@ class Remote:
                 head += (f"\nThe first {self._dropped} lines are not here; "
                          f"they are still in the window.")
             self.say(f"{head}\n\n{part}", html=True)
+
+    def _shot(self):
+        """A picture of the window, because you asked for one.
+
+        The card a finished step sends back is built by diffing what the window
+        said before against what it says after, through whichever profile
+        recognises it - a reconstruction, and the thing you trust least at the
+        moment you are asking whether something worked. This is the window
+        itself, and windows whose profiles read them poorly photograph exactly
+        as well as the ones that read cleanly.
+
+        On request and never otherwise. A picture after every step is a few
+        hundred kilobytes through Telegram, each time, for something usually
+        not looked at.
+        """
+        if self.capture is None:
+            self.say("Nothing here can take a picture - Relay is running "
+                     "without the window thread that grabs one.")
+            return
+        hwnd = self._target()
+        if not hwnd:
+            self.say("Nothing to photograph. Send /target to choose a window, "
+                     "or click into one on the laptop.")
+            return
+
+        title = window_title(hwnd)
+        # Read before the grab rather than after, so it describes the picture
+        # that was taken rather than the screen a second later.
+        in_front = foreground_window() == hwnd
+        blob, why = self.capture(hwnd)
+        if not blob:
+            self.say(f"No picture of {title}: {why}.")
+            return
+
+        self.log(f"[remote] photographed {title!r}, {len(blob) // 1024}kB")
+        caption = self._describe()
+        if not in_front:
+            # Otherwise the picture is of something else entirely and reads as
+            # the wrong window having been photographed. The whole desktop is
+            # what gets grabbed - see shot.py - so whatever is on top is in it.
+            caption += ("\n\nIt was not the window in front, so anything over "
+                        "it is in the picture too.")
+        self.send_photo(blob, caption)
 
     def _restart(self):
         """Leave, having asked the keeper to bring us straight back.
