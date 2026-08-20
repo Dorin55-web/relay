@@ -49,11 +49,12 @@ def isolate_state():
     if _isolated is not None:
         return _isolated
 
-    from relay import logsetup, overlay, prompts
+    from relay import chains, logsetup, overlay, prompts
 
     _isolated = Path(tempfile.mkdtemp(prefix="relay-tests-"))
     overlay.POSITION_FILE = _isolated / "orb_position.json"
     prompts.PROMPTS_PATH = _isolated / "prompts.json"
+    chains.CHAINS_PATH = _isolated / "chains.json"
     # The log is a forensic record - it is what a session that went wrong is
     # read back from - and a test run appending to it, or rotating it away,
     # would be destroying the evidence it exists to keep.
