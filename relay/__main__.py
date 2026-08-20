@@ -75,6 +75,11 @@ class VoicePrompt:
         self.streaming = bool(config.streaming)
         self._session_clipboard = None
         self._pasted_any = False
+        # Escape, raised by the control thread and read by the streaming
+        # worker. A phrase can be inside the model when you press it, and
+        # without somewhere to record that you asked, it would be pasted a
+        # second after you threw the dictation away.
+        self._discarding = threading.Event()
         self.tracker = None
         # Built the first time the write window is opened; most sessions
         # only ever dictate and never need the text model in memory.
@@ -108,6 +113,11 @@ class VoicePrompt:
         self._tell_chain_you_typed()
 
         if not self._hotkey_matches(key):
+            # Escape throws a running dictation away. Tested after the hotkey
+            # rather than before it, so that anyone who has made Escape their
+            # hotkey still gets a toggle out of it.
+            if key == keyboard.Key.esc:
+                self._request_discard()
             return
         # Windows repeats key-down events while a key is held; without this the
         # toggle would fire dozens of times per press.
@@ -164,17 +174,34 @@ class VoicePrompt:
         self._optimistic_ui()
         self._commands.put("toggle")
 
+    def _request_discard(self):
+        """Queue an Escape, if there is a dictation for it to throw away.
+
+        Runs inside the Windows keyboard hook, so it does no more than the
+        toggle does: read the state and queue. The state test is here rather
+        than on the control thread because Escape is a key people press
+        hundreds of times an hour, in every other application on the machine,
+        and every one of those presses must cost nothing and do nothing.
+        """
+        with self._lock:
+            recording = self.state == RECORDING
+        if recording:
+            self._commands.put("discard")
+
     def _control_loop(self):
         """Serialises start/stop so the hook thread never blocks on audio I/O."""
         while not self._stop.is_set():
             try:
-                self._commands.get(timeout=0.25)
+                command = self._commands.get(timeout=0.25)
             except queue.Empty:
                 continue
             try:
-                self.toggle()
+                if command == "discard":
+                    self.discard()
+                else:
+                    self.toggle()
             except Exception as exc:
-                self.feedback.error(f"toggle failed: {exc}")
+                self.feedback.error(f"{command} failed: {exc}")
                 self._set_state(IDLE)
 
     def _set_state(self, state):
@@ -209,6 +236,11 @@ class VoicePrompt:
                 # Snapshot once for the whole session; phrases paste repeatedly.
                 self._session_clipboard = save_clipboard(self.config)
                 self._pasted_any = False
+                # Cleared here as well as when a discarded session ends: a flag
+                # left standing by a session that finished some other way would
+                # silently throw away every phrase from now on, and there would
+                # be no error anywhere to say why nothing was being pasted.
+                self._discarding.clear()
             try:
                 self.recorder.start()
             except Exception as exc:
@@ -238,6 +270,52 @@ class VoicePrompt:
 
         else:
             print("[..] still processing the previous dictation")
+
+    def discard(self):
+        """Throw the dictation being spoken away instead of pasting it.
+
+        Escape, on the control thread. Only a recording can be discarded:
+        once the clip has gone to the worker the paste is already on its way,
+        and there is nothing honest left to stop.
+        """
+        with self._lock:
+            state = self.state
+        if state != RECORDING:
+            return
+
+        self._set_state(PROCESSING)
+
+        if not self.streaming:
+            try:
+                # The clip is simply never put on the job queue.
+                self.recorder.stop()
+            except Exception as exc:
+                # Deliberately not a return. A microphone that goes away while
+                # it is being closed still has to leave you at idle - anything
+                # else is the orb spinning in `processing` with the hotkey dead
+                # for the rest of the session.
+                self.feedback.error(f"could not stop recording: {exc}")
+            self.feedback.discarded()
+            self._set_state(IDLE)
+            return
+
+        # Live: the phrases you finished before pressing Escape are already in
+        # the window, and no paste can be taken back. What can still be stopped
+        # is everything the worker has not pasted yet - including the phrase
+        # you were half way through, which stop() is about to flush - so the
+        # flag goes up first.
+        self._discarding.set()
+        try:
+            self.recorder.stop()
+        except Exception as exc:
+            self.feedback.error(f"could not stop recording: {exc}")
+            # stop() is also what puts the end marker on the phrase queue, and
+            # it raises before reaching it. Without a marker the worker waits
+            # for ever, still holding the clipboard it took on your behalf, and
+            # the state never comes back to idle.
+            self.recorder.phrases.put(audio_mod.END_OF_SESSION)
+        # The worker closes the session off when it reaches that marker: hands
+        # the clipboard back, says what it was able to discard, returns to idle.
 
     # --- worker ----------------------------------------------------------
 
@@ -270,14 +348,29 @@ class VoicePrompt:
             if phrase is audio_mod.END_OF_SESSION:
                 restore_clipboard(self._session_clipboard, self.config)
                 self._session_clipboard = None
-                if not self._pasted_any:
+                if self._discarding.is_set():
+                    self._discarding.clear()
+                    self.feedback.discarded(self._pasted_any)
+                elif not self._pasted_any:
                     self.feedback.nothing_heard()
                 self._set_state(IDLE)
+                continue
+
+            if self._discarding.is_set():
+                # Escape: drain the rest of the session without translating
+                # any of it. A phrase costs about a second of GPU, and not one
+                # word of it would be pasted.
                 continue
 
             try:
                 text = self.engine.translate(phrase)
                 if not text:
+                    continue
+                if self._discarding.is_set():
+                    # Read again on the way out of the model. A phrase handed
+                    # to it in the second before Escape was pressed would
+                    # otherwise land in the window after you asked for the
+                    # dictation to be thrown away.
                     continue
                 # A leading space keeps phrases apart without a trailing one
                 # dangling when you stop.
@@ -628,6 +721,7 @@ class VoicePrompt:
         target = "English" if self.config.task == "translate" else "as spoken"
         print("\n" + "=" * 62)
         print(f"  Press {hotkey_label} to start, {hotkey_label} again to stop.")
+        print("  Escape while talking throws that dictation away instead.")
         if show_ui:
             print("  Or click the orb. Drag to move it.")
             print("  Right-click it for the prompt templates, and to quit.")

@@ -57,6 +57,24 @@ class Feedback:
         if self.enabled:
             _beep_async([(440, 120)])
 
+    def discarded(self, already_pasted=False):
+        """Escape: the dictation was thrown away rather than pasted.
+
+        `already_pasted` is the live case. Phrases go into the window as you
+        finish saying them, so by the time you press Escape some of the text is
+        already there and no paste can be taken back - and saying "discarded"
+        on its own would be a lie about the window you are looking at.
+        """
+        if already_pasted:
+            print("[xx] discarded; what was already pasted stays where it is\n")
+        else:
+            print("[xx] discarded; nothing was pasted\n")
+        if self.enabled:
+            # Three steps down and away. Not the two-tone fall of a stop, which
+            # promises text is coming, and not the low buzz of a failure:
+            # nothing went wrong, you asked for this.
+            _beep_async([(780, 60), (620, 60), (490, 90)])
+
     def error(self, message):
         print(f"[!!] {message}\n")
         if self.enabled:
