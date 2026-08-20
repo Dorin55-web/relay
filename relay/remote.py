@@ -30,6 +30,7 @@ from collections import deque
 from pathlib import Path
 
 from . import agent
+from . import later
 from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
                         STARTING, STOPPED, WAITING)
 from .target import foreground_window, window_title
@@ -70,6 +71,7 @@ COMMANDS = (
     ("more", "The whole of the last result, not just the card"),
     ("shot", "A picture of the window"),
     ("target", "Choose which window to write into"),
+    ("at", "Send a prompt later - /at 05:00 read the log"),
     ("stop", "Cancel the queue"),
     ("restart", "Quit and come straight back"),
     ("start", "Start Relay when it is not running"),
@@ -848,6 +850,11 @@ class Remote:
                              "It has not been queued.")
 
             try:
+                self._release_due()
+            except Exception as exc:
+                self.log(f"[later] could not release what was waiting: {exc}")
+
+            try:
                 self._drain()
             except Exception as exc:
                 # This used to sit outside the guard entirely, so anything it
@@ -988,6 +995,8 @@ class Remote:
             self._shot()
         elif command == "/target":
             self._target_command(parts[1] if len(parts) > 1 else None)
+        elif command == "/at":
+            self._at(text.split(None, 1)[1] if len(parts) > 1 else "")
         elif command == "/stop":
             self.pending.clear()
             if self.pilot.running:
@@ -1103,6 +1112,111 @@ class Remote:
             caption += ("\n\nIt was not the window in front, so anything over "
                         "it is in the picture too.")
         self.send_photo(blob, caption)
+
+    def _at(self, rest):
+        """Hold a prompt back until a time you name.
+
+        For the hours when the agent has run out of its allowance and says so.
+        The work is ready, the window will not take it until the small hours,
+        and you are not going to be awake for that - so it waits on disk and
+        goes out by itself.
+
+        The same shapes as /target: nothing after it lists what is waiting, and
+        an argument acts.
+        """
+        rest = (rest or "").strip()
+        if not rest:
+            self.say(self._waiting_list())
+            return
+
+        first, _, tail = rest.partition(" ")
+        if first.lower() == "cancel":
+            which = tail.strip()
+            if which and not which.isdigit():
+                self.say("Send /at cancel to drop them all, or /at cancel 2 "
+                         "to drop the second.")
+                return
+            gone = later.drop(int(which) if which else None)
+            if not gone:
+                self.say("Nothing was dropped.\n\n" + self._waiting_list())
+                return
+            word = "prompt" if gone == 1 else "prompts"
+            self.say(f"Dropped {gone} {word}.\n\n" + self._waiting_list())
+            return
+
+        when = later.parse_time(first)
+        if when is None:
+            self.say("I did not understand that time. /at 05:00 your prompt, "
+                     "or /at 5. It is always the next time it comes round, so "
+                     "05:00 written at midnight means this morning.")
+            return
+        if not tail.strip():
+            self.say(f"That is {later.in_words(when)}, but there is no prompt "
+                     f"after it. /at {when:%H:%M} and then what to send.")
+            return
+
+        # Translated now rather than at the hour, so what you see is what will
+        # be typed and there is a whole night in which to /at cancel it.
+        prompt, _english = self._to_english(tail.strip())
+        waiting = later.add(when, prompt)
+        if waiting is None:
+            self.say(f"Nothing was kept - there are already "
+                     f"{later.MAX_WAITING} waiting, which is as many as this "
+                     f"holds.\n\n" + self._waiting_list())
+            return
+        self.say(f"Kept for {later.in_words(when)}.\n\n{prompt}\n\n"
+                 f"/at lists them, /at cancel drops them.")
+
+    def _waiting_list(self):
+        """What is held back, in the order it will go out."""
+        waiting = later.load()
+        if not waiting:
+            return ("Nothing is waiting. Send /at 05:00 and then a prompt, and "
+                    "it goes out at five - useful when the agent has run out "
+                    "of its allowance and will not take anything until then.")
+        from datetime import datetime
+
+        lines = ["Waiting to go out:", ""]
+        for number, entry in enumerate(waiting, start=1):
+            when = datetime.fromisoformat(entry["at"])
+            lines.append(f"{number}. {later.in_words(when)}")
+            lines.append(f"    {entry['prompt'][:120]}")
+        lines.append("")
+        lines.append("/at cancel 1 drops one, /at cancel drops the lot.")
+        return "\n".join(lines)
+
+    def _release_due(self):
+        """Queue anything whose hour has come. Called once a poll.
+
+        Written back to disk before anything is queued rather than after: the
+        other order sends a prompt and then, if the write fails or the process
+        goes, sends it again on the next poll, and again - a prompt typed into
+        an agent over and over while nobody is at the desk.
+        """
+        send, missed, waiting = later.due()
+        if not send and not missed:
+            return
+        if not later.save(waiting):
+            self.log("[later] could not write the schedule back; nothing released")
+            return
+
+        for entry in missed:
+            self.say(f"This was due at {entry['at'][11:16]} and is more than "
+                     f"{later.LATE_HOURS} hours late, so I have not sent "
+                     f"it:\n\n{entry['prompt'][:300]}")
+
+        if not send:
+            return
+        self.log(f"[later] releasing {len(send)} prompt(s)")
+        if self._card is not None and not self.pending_own_card:
+            self._new_card()
+        self.pending_own_card = True
+        for entry in send:
+            self.pending.append(entry["prompt"])
+            self._prompts.append(entry["prompt"])
+        due_at = send[0]["at"][11:16]
+        self._paint(icon=ICON_WORKING,
+                    head=f"the {due_at} prompt - waiting for a free window")
 
     def _restart(self):
         """Leave, having asked the keeper to bring us straight back.

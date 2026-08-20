@@ -48,6 +48,8 @@ REACHED_ACROSS = {
     "relay.keeper": ["Keeper", "MUTEX_NAME", "KEEPER_MUTEX_NAME",
                      "relay_is_running", "another_keeper_running", "settings",
                      "install_at_logon", "remove_from_logon", "startup_folder"],
+    "relay.later": ["load", "save", "add", "drop", "due", "parse_time",
+                    "in_words", "LATER_PATH"],
     "relay.logsetup": ["setup_output", "LOG_PATH", "PREVIOUS_LOG_PATH"],
     "relay.look_picker": ["open_picker"],
     "relay.orbs": ["frame", "speed_of", "is_look", "clamp_size", "clamp_speed",

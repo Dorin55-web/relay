@@ -835,4 +835,126 @@ if len(requests) == 2:
           and photo.full_url.endswith("/sendPhoto"),
           f"{plain.full_url[-20:]} {photo.full_url[-20:]}")
 
+print("\n--- keeping a prompt for an hour that has not come ---")
+# The case: the agent has run out of its allowance and will not take another
+# word until the small hours, and you are not going to be awake for that.
+from datetime import datetime, timedelta  # noqa: E402
+
+from relay import later as later_mod      # noqa: E402
+
+later_mod.save([])
+bot, api, sent = make()
+api.feed(text="/at 05:00 read the log and tell me why")
+handle(bot, api)
+check("it says it was kept", any("Kept for" in s for s in api.sent), str(api.sent))
+check("naming the hour", any("05:00" in s for s in api.sent), str(api.sent))
+check("nothing was queued now", len(bot.pending) == 0, str(list(bot.pending)))
+check("nothing was typed", sent == [], str(sent))
+check("and it is on disk", len(later_mod.load()) == 1, str(later_mod.load()))
+check("Telegram would take that", api.rejected == [], str(api.rejected[:2]))
+
+
+print("\n--- and /at on its own says what is waiting ---")
+api.feed(text="/at")
+handle(bot, api)
+check("it lists it", any("read the log" in s for s in api.sent), str(api.sent[-1:]))
+check("with how far off it is",
+      any("tomorrow at 05:00" in s or "today at 05:00" in s for s in api.sent),
+      str(api.sent[-1:]))
+
+
+print("\n--- a time it cannot read is refused, not guessed at ---")
+later_mod.save([])
+bot, api, sent = make()
+for bad in ["/at 25:00 do the thing", "/at half-five do the thing",
+            "/at banana do the thing"]:
+    api.feed(text=bad)
+handle(bot, api)
+check("each one answered", len(api.sent) == 3, str(len(api.sent)))
+check("saying what it takes",
+      all("05:00" in s for s in api.sent), str(api.sent[:1]))
+check("and nothing was kept", later_mod.load() == [], str(later_mod.load()))
+
+
+print("\n--- an hour with no prompt after it ---")
+later_mod.save([])
+bot, api, sent = make()
+api.feed(text="/at 05:00")
+handle(bot, api)
+check("it says the prompt is missing",
+      any("no prompt" in s for s in api.sent), str(api.sent))
+check("and keeps nothing", later_mod.load() == [], str(later_mod.load()))
+
+
+print("\n--- what is kept is the English, translated when you wrote it ---")
+# So there is a whole night in which to read it back and drop it, rather than
+# finding out at five what the model made of your sentence.
+later_mod.save([])
+bot, api, sent = make(translate=lambda text: "the English of it")
+api.feed(text="ceva in romana")
+api.feed(text="/at 05:00 alta chestie in romana")
+handle(bot, api)
+check("kept in English",
+      later_mod.load()[0]["prompt"] == "the English of it", str(later_mod.load()))
+check("and shown to you now", any("the English of it" in s for s in api.sent),
+      str(api.sent[-1:]))
+
+
+print("\n--- dropping one, and dropping the lot ---")
+later_mod.save([])
+bot, api, sent = make()
+for hour in ("05:00", "07:00", "09:00"):
+    api.feed(text=f"/at {hour} prompt for {hour}")
+handle(bot, api)
+check("three waiting", len(later_mod.load()) == 3, str(len(later_mod.load())))
+api.feed(text="/at cancel 2")
+handle(bot, api)
+check("the second is gone", len(later_mod.load()) == 2, str(later_mod.load()))
+check("and the other two are not",
+      all("07:00" not in e["prompt"] for e in later_mod.load()),
+      str([e["prompt"] for e in later_mod.load()]))
+api.feed(text="/at cancel")
+handle(bot, api)
+check("then none", later_mod.load() == [], str(later_mod.load()))
+check("Telegram would take all of it", api.rejected == [], str(api.rejected[:2]))
+
+
+print("\n--- and when the hour comes, it goes ---")
+later_mod.save([])
+bot, api, sent = make()
+gone_by = datetime.now() - timedelta(minutes=1)
+later_mod.add(gone_by, "the prompt you left", None)
+bot._release_due()
+check("it is queued", list(bot.pending) == ["the prompt you left"],
+      str(list(bot.pending)))
+check("the card says so", any("waiting for a free window" in t for t in api.all_text),
+      str(api.all_text[-1:]))
+check("and it is off the list", later_mod.load() == [], str(later_mod.load()))
+
+
+print("\n--- once, not on every poll ---")
+# The list is written back before anything is queued. The other order sends the
+# prompt and then, if the write fails or the process goes, sends it again on
+# the next poll, and again - typed into an agent over and over with nobody at
+# the desk to stop it.
+bot.pending.clear()
+bot._release_due()
+bot._release_due()
+check("nothing came round a second time", len(bot.pending) == 0,
+      str(list(bot.pending)))
+
+
+print("\n--- one left too late is reported rather than sent ---")
+later_mod.save([])
+bot, api, sent = make()
+ancient = datetime.now() - timedelta(hours=later_mod.LATE_HOURS + 2)
+later_mod.add(ancient, "this one has gone stale", None)
+bot._release_due()
+check("not queued", len(bot.pending) == 0, str(list(bot.pending)))
+check("but you are told",
+      any("have not sent it" in s for s in api.sent), str(api.sent))
+check("and it does not sit there for ever", later_mod.load() == [],
+      str(later_mod.load()))
+later_mod.save([])
+
 sys.exit(report.finish())
