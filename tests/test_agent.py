@@ -13,14 +13,21 @@ including a discussion of these very rules. That is not hypothetical. The
 session that produced the Claude profile had the words "Claude is working" and
 "Stop" in its transcript, put there by writing the profile.
 
-The last three groups name no application at all. A measured string can only
-be checked against the application it came out of, and the profile that goes
-wrong is the one written next - so those groups ask instead what has to be
-true of any profile whatever it was written for: that every condition it is
-allowed to use is one the reader actually enforces, that the busy window it
-describes is never also read as finished, and that it says which window on
-screen is its own. A fourth profile is held to all of it on the day it is
-added, without anyone remembering to come back here.
+Two groups of sections here name no application at all. A measured string can
+only be checked against the application it came out of, and the profile that
+goes wrong is the one written next - so those ask instead what has to be true
+of any profile whatever it was written for: that every condition it is allowed
+to use is one the reader actually enforces, that the busy window it describes
+is never also read as finished, and that it says which window on screen is its
+own. A fourth profile is held to all of it on the day it is added, without
+anyone remembering to come back here.
+
+One string below was not measured, and says so where it appears. Nobody has
+caught Claude or opencode stopped at a permission prompt with the probe, so
+neither has a `waiting` rule and neither can ring the bell on the phone. What
+those sections settle is everything about that rule which does not need the
+words: that it is missing, what it costs while it is, and the shape it has to
+take when the measurement finally arrives.
 """
 import sys
 
@@ -122,6 +129,85 @@ check("another session running elsewhere is not this one",
 
 check("a cold accessibility tree is unknown, not idle",
       state(cl, "") == agent.UNKNOWN)
+
+
+print("\n--- the state none of these can report yet ---")
+# The bell on the phone is agent.WAITING, and WAITING comes from exactly one
+# place: a rule called `waiting`. Antigravity has one because its permission
+# prompt was caught with the probe. Nobody has caught Claude or opencode at
+# one, so they have none - and a rule that is not there can never match,
+# whatever the window says.
+carries = {name: bool(p.get("waiting")) for name, p in BY_NAME.items()}
+check("Antigravity was measured at one", carries["Antigravity"])
+check("Claude has not been", not carries["Claude"], "delete this line when it is")
+check("opencode has not been", not carries["opencode"], "delete this line when it is")
+check("and a rule nobody has written never matches",
+      not agent._matches(cl.get("waiting"), window("Chat mode"), []))
+
+# So a Claude that has stopped to ask you something falls all the way through
+# to unknown, which holds the queue - safe, and useless. The phone says
+# "cannot tell what it is doing" at the one moment somebody in another room
+# would have wanted telling. Seen in relay.log as `step 1: cannot tell what it
+# is doing; holding`, in the middle of a chain that was waiting on a dialog.
+#
+# What is proved here is only the half that does not need the measurement: a
+# window showing neither of the two lines the profile knows has no answer left
+# in it. Whether a permission prompt is really such a window is the one thing
+# only the probe can settle.
+check("a window with neither line under the composer has no answer left",
+      state(cl, window("Chat mode")) == agent.UNKNOWN)
+
+
+print("\n--- opencode has no such fall-through ---")
+# Its two rules are exact opposites - the status line is on screen or it is
+# not - so every read of an opencode window is busy or idle and unknown is
+# unreachable. That is worth knowing before a waiting rule is written for it.
+# Claude stopping to ask a question costs a notification; opencode stopping to
+# ask one may cost more, because if its prompt clears `esc interrupt` the
+# answer today is idle, and idle is the only state a queue will move on.
+for said in ("", "esc interrupt", "9.6K (1%) ctrl+p commands", "a screen of who knows"):
+    check(f"{(said or 'nothing at all')[:24]!r} is called one or the other",
+          state(oc, said) in (agent.BUSY, agent.IDLE), state(oc, said))
+
+
+print("\n--- the shape a waiting rule will have to have ---")
+# No measured strings here, because there are none to have yet - they are
+# measured or they are nothing. The shape can be settled without them, and it
+# is the trap Antigravity's rule was already written around: the request stays
+# in the transcript after you have answered it, so the phrase on its own would
+# read as "waiting" for the rest of the session.
+ASKED = "<the line the probe comes back with>"
+asking = window(ASKED, "Chat mode")
+answered = window(ASKED, "Chat mode", "Send")
+
+check("the phrase alone matches while it is asking",
+      agent._matches({"line": ASKED}, asking, []))
+check("and would still match an hour after you answered",
+      agent._matches({"line": ASKED}, answered, []))
+check("paired with the composer being gone it matches while asking",
+      agent._matches({"line": ASKED, "absent_line": "send"}, asking, []))
+check("and falls away the moment the composer is back",
+      not agent._matches({"line": ASKED, "absent_line": "send"}, answered, []))
+
+# And it has to be `line` rather than `text`, for the same reason busy and idle
+# already are: this app publishes the whole conversation, so the session that
+# writes the rule puts the rule's own trigger on screen. A fragment rule would
+# ring the bell at somebody quoting it.
+quoted = f"someone in the conversation quoting {ASKED}\n" + window("Chat mode")
+check("a fragment rule fires on the conversation quoting it",
+      agent._matches({"text": ASKED, "absent_line": "send"}, quoted, []))
+check("a whole-line rule does not",
+      not agent._matches({"line": ASKED, "absent_line": "send"}, quoted, []))
+
+# Dropped into the profile, that shape gives the three answers the phone needs.
+# The last is the ordering: state() asks busy before waiting, so a window that
+# is working again is never read as still stopped for you.
+supposed = dict(cl, waiting={"line": ASKED, "absent_line": "send"})
+check("asking rings the bell", state(supposed, asking) == agent.WAITING)
+check("answering it puts the queue back to work",
+      state(supposed, answered) == agent.IDLE)
+check("and one that has started working again is busy, not asking",
+      state(supposed, window(ASKED, "Chat mode", "Stop")) == agent.BUSY)
 
 
 print("\n--- where a step gets typed ---")
