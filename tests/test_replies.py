@@ -249,12 +249,12 @@ print("\n--- every reply the bot can give ---")
 # The whole command surface in one pass, checked as it goes out.
 agent.recognised_windows = lambda: [(HWND, "Some Window", {"name": "fake"})]
 bot, api, sent = make()
-for message in ["/start", "/help", "/status", "/target", "/target 1", "/target 0",
-                "/target 99", "/keys", "/keys off", "/stop", "/restart",
-                "/nonsense", "/", "salut"]:
+for message in ["/start", "/help", "/status", "/more", "/target", "/target 1",
+                "/target 0", "/target 99", "/keys", "/keys off", "/stop",
+                "/restart", "/nonsense", "/", "salut"]:
     api.feed(text=message)
 handle(bot, api)
-check("each one was answered", len(api.sent) >= 13, str(len(api.sent)))
+check("each one was answered", len(api.sent) >= 14, str(len(api.sent)))
 check("and Telegram would take all of them", api.rejected == [],
       str(api.rejected[:3]))
 
@@ -437,5 +437,184 @@ plain = ("Erai in setarile Claude cand a pornit lantul, asa ca a tinut, a "
 check("this one is longer than the old limit", len(plain) > 140, str(len(plain)))
 check("and is not shortened now",
       remote_mod._shorten(plain, remote_mod.LINE_CHARS) == plain, plain)
+
+
+def unescaped(part):
+    """One /more message with its heading off and its escaping undone.
+
+    `&amp;` last of the three: undone first, a window that had written the
+    characters `&lt;` would come back as `<` and the comparison would pass on
+    text that had been mangled.
+    """
+    body = part.split("\n\n", 1)[-1]
+    return (body.replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&amp;", "&"))
+
+
+print("\n--- /more, before anything has finished ---")
+# The same silence as everywhere else in this file: a command that answers
+# nothing cannot be told from one that was never delivered.
+bot, api, sent = make()
+api.feed(text="/more")
+handle(bot, api)
+check("it answers", api.sent != [], str(api.sent))
+check("and says nothing has come back yet",
+      "Nothing has finished" in api.sent[0], api.sent[0][:90])
+
+
+print("\n--- and when the step itself produced nothing ---")
+# Different from the above, and worth different words: a step did run, and the
+# window had nothing new in it afterwards.
+bot, api, sent = make()
+bot._result(0, [])
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+check("it says the card was all there was",
+      "nothing new" in api.sent[before].lower(), api.sent[before][:90])
+
+
+print("\n--- /more sends the whole of the last result ---")
+# The card keeps five lines, each cut to a sentence, and drops the rest the
+# moment it is drawn. Unless something holds on to it, there is nothing left
+# for this command to send.
+bot, api, sent = make()
+bot._prompts = ["do the thing"]
+long_line = "a line far longer than the card would keep: " + "detail " * 40
+bot._result(0, ["first, the part the card never shows", long_line,
+                "a name with a & and a <tag> in it",
+                "and the verdict at the end"])
+card_id = len(api.sent)
+card = api.messages[card_id]
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+more = "\n".join(api.sent[before:])
+check("the card had shortened that line", long_line not in card, card[-120:])
+check("but /more sends it whole", long_line in more, more[:120])
+check("including the line the card had no room for",
+      "first, the part the card never shows" in more, more[:120])
+check("the ampersand and the tag survive as themselves",
+      "a name with a &amp; and a &lt;tag&gt; in it" in more, more[-160:])
+check("Telegram would take it", api.rejected == [], str(api.rejected[:2]))
+check("and the card itself is not touched",
+      api.messages[card_id] == card, api.messages[card_id][:80])
+
+
+print("\n--- the heading names the window, markup in the name and all ---")
+# The heading is sent as HTML alongside text that is already escaped, so
+# nothing escapes it on the way out but the heading itself.
+bot, api, sent = make()
+bot._where = "main.py <2> - Reports & Figures"
+bot._result(0, ["something worth reading"])
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+check("the window is named", "main.py &lt;2&gt;" in api.sent[before],
+      api.sent[before][:120])
+check("and Telegram would take that too", api.rejected == [],
+      str(api.rejected[:2]))
+
+
+print("\n--- a result too long for one message goes out as several, in order ---")
+# Telegram takes about 4096 characters. Six thousand in one message is not a
+# truncated reply, it is no reply at all.
+bot, api, sent = make()
+lines = [f"line {n:02d} " + "y" * 300 for n in range(20)]
+bot._result(0, lines)
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+parts = api.sent[before:]
+check("it took more than one message", len(parts) > 1, str(len(parts)))
+check("none of them is longer than Telegram takes",
+      all(len(p) <= remote_mod.MESSAGE_CHARS for p in parts),
+      str(max(len(p) for p in parts)))
+check("each says which of how many it is",
+      all(f"({n}/{len(parts)})" in p for n, p in enumerate(parts, start=1)),
+      parts[0][:70])
+check("they read in the order the window wrote them",
+      "line 00" in parts[0] and "line 19" in parts[-1], parts[-1][:60])
+check("and no line fell down a seam",
+      all(f"line {n:02d}" in "".join(parts) for n in range(20)), str(len(parts)))
+check("Telegram would take every one", api.rejected == [], str(api.rejected[:2]))
+
+
+print("\n--- and a seam never lands inside an entity ---")
+# Escaping and then cutting to length is the obvious order and the wrong one:
+# `&amp;` is five characters, and a cut inside it leaves a bare ampersand -
+# the whole message refused, in the middle of the reply you asked to see. Cut
+# the plain text and escape each piece whole, and it cannot happen.
+bot, api, sent = make()
+dense = "<x> & " * 500          # nothing in it survives escaping unchanged
+bot._result(0, [dense])
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+parts = api.sent[before:]
+check("this one took several messages too", len(parts) > 1, str(len(parts)))
+check("Telegram would take every one of them", api.rejected == [],
+      str(api.rejected[:2]))
+rebuilt = "".join(unescaped(p) for p in parts).replace("\n", "")
+check("and nothing was lost or repeated where they join",
+      rebuilt == dense, f"{len(rebuilt)} characters against {len(dense)}")
+
+
+print("\n--- a result too big to hold is capped, and says it was ---")
+# One step can put a whole build log on screen. What /more keeps is held until
+# the next step replaces it, and forty messages is not an answer anybody can
+# read on a phone.
+bot, api, sent = make()
+bot._result(0, [f"line {n:04d} " + "z" * 200 for n in range(300)])
+check("only what fits is kept",
+      sum(len(ln) for ln in bot._full) <= remote_mod.MORE_CHARS,
+      str(sum(len(ln) for ln in bot._full)))
+check("and the rest is counted rather than forgotten", bot._dropped > 0,
+      str(bot._dropped))
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+parts = api.sent[before:]
+check("the phone is told what it is not getting",
+      "still in the window" in parts[0], parts[0][:170])
+check("what it does get is the end, where the card was looking",
+      "line 0299" in "".join(parts), parts[-1][-60:])
+check("in a handful of messages, not forty", len(parts) <= 5, str(len(parts)))
+check("Telegram would take those as well", api.rejected == [],
+      str(api.rejected[:2]))
+
+
+print("\n--- and it holds one step's worth, which is the most recent ---")
+# Replaced every time a step finishes, so a chain of forty leaves forty times
+# nothing behind - and /more is about the result you are looking at rather
+# than one from an hour ago.
+bot, api, sent = make()
+bot._result(0, ["the first step said this"])
+bot._result(1, ["the second step said something else"])
+before = len(api.sent)
+api.feed(text="/more")
+handle(bot, api)
+more = "\n".join(api.sent[before:])
+check("the newer result is what comes back",
+      "the second step said something else" in more, more[:120])
+check("and the older one is not held on to",
+      "the first step said this" not in more, more[:120])
+
+
+print("\n--- and nothing offers a command that only some of the file knows ---")
+# COMMANDS is what setMyCommands publishes and what /help prints. A command
+# added anywhere else works and is offered by nothing - which is what happened
+# to the help text before it was built from this same tuple.
+check("/more is in COMMANDS",
+      any(name == "more" for name, _what in remote_mod.COMMANDS),
+      str([name for name, _what in remote_mod.COMMANDS]))
+bot, api, sent = make()
+api.feed(text="/nonsense")
+handle(bot, api)
+check("and the answer to one it does not know lists it too",
+      "/more" in api.sent[-1], api.sent[-1])
+check("along with every other one there is",
+      all(f"/{name}" in api.sent[-1] for name, _what in remote_mod.COMMANDS),
+      api.sent[-1])
 
 sys.exit(report.finish())

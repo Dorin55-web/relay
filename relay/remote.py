@@ -66,6 +66,7 @@ NO_KEYBOARD = {"remove_keyboard": True}
 # answers, and that is the moment you most need to be told the command exists.
 COMMANDS = (
     ("status", "What it can see right now"),
+    ("more", "The whole of the last result, not just the card"),
     ("target", "Choose which window to write into"),
     ("stop", "Cancel the queue"),
     ("restart", "Quit and come straight back"),
@@ -108,6 +109,18 @@ LINE_CHARS = 220
 BAD_LINES = 4
 BAD_CHARS = 180
 
+# And how much of it /more will hand over when the verdict is not enough.
+#
+# One step's worth, replaced every time a step finishes: an evening of forty
+# steps costs this once rather than forty times, and nothing here has to
+# decide when to let an old chain go. The cap is for the step that puts a
+# whole build log on screen - four messages is already a lot to scroll on a
+# phone, and past that the window is the better place to read it.
+MORE_CHARS = 12000
+# Kept back inside each message for the line that names the window and says
+# which part of how many this is.
+MORE_HEAD_CHARS = 300
+
 # How many of a batch's prompts to list on the card before summarising the
 # rest. More than a few and the state line is pushed off a phone screen.
 CARD_PROMPTS = 4
@@ -121,6 +134,9 @@ ICON_NEEDS_YOU = "🔔"
 ICON_DONE = "✅"
 ICON_TROUBLE = "⚠️"
 ICON_STOPPED = "⛔"
+# Not a state: what /more sends is not a card, and should not arrive looking
+# like one that has changed its mind about how the step went.
+ICON_MORE = "📄"
 
 
 def _shorten(text, limit):
@@ -167,6 +183,58 @@ def _fit(text, limit=MESSAGE_CHARS):
     if last != -1 and ";" not in out[last:]:
         out = out[:last]
     return out
+
+
+def _pieces(line, limit):
+    """One line as lengths that fit once escaped, cut on the plain text.
+
+    For the line that is a message all by itself: a pasted stack trace on one
+    line, or a terminal that wrapped nothing. Escaping can turn one character
+    into five, so where to cut is measured on the escaped form and applied to
+    the plain one.
+    """
+    while len(_esc(line)) > limit:
+        take = limit
+        while len(_esc(line[:take])) > limit:
+            # Shrink in proportion to the overrun rather than a character at a
+            # time: a line of nothing but ampersands is five times its own
+            # length escaped, and stepping down to it one at a time is
+            # thousands of passes over the same string.
+            take = max(1, take * limit // len(_esc(line[:take])))
+        yield line[:take]
+        line = line[take:]
+    yield line
+
+
+def _split(text, limit=MESSAGE_CHARS):
+    """The text as messages Telegram will take, cut first and escaped after.
+
+    That order is the whole of it. Escaping first and cutting the result puts
+    the knife through an `&amp;` sooner or later, and half an entity is the
+    same message Telegram refuses that everything here is escaped to avoid -
+    which arrives as silence, in the middle of a reply you asked to see. Cut
+    the plain text and every piece is escaped whole.
+
+    On line ends where there are any, because what is being sent is output.
+    """
+    parts, part = [], ""
+    for line in text.split("\n"):
+        joined = f"{part}\n{line}" if part else line
+        if len(_esc(joined)) <= limit:
+            part = joined
+            continue
+        if part:
+            parts.append(_esc(part))
+        # The line will not fit in a message even on its own, so it goes out
+        # in lengths of itself - and those are not put back together with a
+        # newline between them, which would be a line break the window never
+        # wrote.
+        pieces = list(_pieces(line, limit))
+        parts.extend(_esc(piece) for piece in pieces[:-1])
+        part = pieces[-1]
+    if part:
+        parts.append(_esc(part))
+    return parts
 
 
 # What Telegram sends when a message is not text. Named, so the reply can say
@@ -247,6 +315,26 @@ def _last_of(lines):
             break
         out.append(line)
         budget -= len(line)
+    return list(reversed(out))
+
+
+def _within(lines, budget):
+    """As much of the end of `lines` as `budget` characters allow.
+
+    The end, like the card, so /more carries on outwards from the same place
+    rather than showing a different part of the same answer and leaving the
+    join to be worked out. Whole lines, except when the first one kept is on
+    its own longer than the budget - one line and no output at all is a worse
+    answer than the front of that line.
+    """
+    out, left = [], budget
+    for line in reversed(lines):
+        if len(line) + 1 > left:
+            if not out:
+                out.append(_shorten(line, budget))
+            break
+        out.append(line)
+        left -= len(line) + 1
     return list(reversed(out))
 
 # What gets written on first run. The instructions are one line, and they say
@@ -431,6 +519,13 @@ class Remote:
         # card rather than reopening a closed one.
         self.pending_own_card = False
         self._where = ""
+        # What the last finished step said, in full, for /more. The card keeps
+        # five shortened lines of it and drops the rest the moment it is drawn,
+        # so this is the only copy - and None here means no step has finished
+        # yet, which is a different answer from a step that said nothing.
+        self._full = None
+        # How many lines of that were more than MORE_CHARS would hold.
+        self._dropped = 0
         self.pilot = Autopilot(send=send, on_progress=self._progress,
                                on_result=self._result, log=log)
         # The card is drawn from two threads: this one, when a message
@@ -791,6 +886,8 @@ class Remote:
         command = parts[0].lower()
         if command in ("/status", "/state"):
             self.say(self._describe())
+        elif command == "/more":
+            self._more()
         elif command == "/target":
             self._target_command(parts[1] if len(parts) > 1 else None)
         elif command == "/stop":
@@ -826,8 +923,49 @@ class Remote:
                      "\n\nStart a line with = to send it exactly as typed, "
                      "without translating.")
         else:
-            self.say("I only know /status, /target, /stop, /restart, /keys "
-                     "and /help.")
+            # From COMMANDS as well. This sentence was a third copy of the
+            # list, written out by hand, and the two that were written out by
+            # hand are the two that have gone stale.
+            known = ", ".join(f"/{name}" for name, _what in COMMANDS[:-1])
+            self.say(f"I only know {known} and /{COMMANDS[-1][0]}.")
+
+    def _more(self):
+        """The whole of the last result, in as many messages as that takes.
+
+        The card is deliberately five shortened lines - a verdict read at a
+        glance - and the answer to "did that work" is usually all anybody
+        wants. This is the other times: the verdict says something went wrong
+        and the reason is four lines above the ones shown, and the window it
+        is all sitting in is on a laptop in another room.
+
+        Separate messages rather than a longer card. The card has a shape that
+        was argued over, it is edited in place while the chain runs, and a
+        transcript pasted into it would be rewritten out from under you at the
+        next poll.
+        """
+        if self._full is None:
+            self.say("Nothing has finished yet, so there is nothing more to "
+                     "show. Send a prompt, and /more gives you the whole of "
+                     "what comes back.")
+            return
+        if not self._full:
+            self.say("The last step put nothing new in the window, so the card "
+                     "is all there was. It may have answered somewhere this "
+                     "cannot see.")
+            return
+
+        # Escaped inside _split, one whole piece at a time, so nothing here
+        # can hand Telegram half an entity. See _split.
+        parts = _split("\n".join(self._full), MESSAGE_CHARS - MORE_HEAD_CHARS)
+        where = self._where or "the last step"
+        for number, part in enumerate(parts, start=1):
+            which = f" ({number}/{len(parts)})" if len(parts) > 1 else ""
+            head = f"{ICON_MORE} <b>{_fit(where, 120)}{which}</b>"
+            if number == 1 and self._dropped:
+                # At the top, because what was dropped came off the top.
+                head += (f"\nThe first {self._dropped} lines are not here; "
+                         f"they are still in the window.")
+            self.say(f"{head}\n\n{part}", html=True)
 
     def _restart(self):
         """Leave, having asked the keeper to bring us straight back.
@@ -1015,6 +1153,12 @@ class Remote:
         asked = {p.strip() for p in self._prompts}
         lines = [ln for ln in new_lines
                  if len(ln) > 1 and not _is_chrome(ln) and ln.strip() not in asked]
+        # Kept whole, before the card shortens anything, because this is the
+        # only moment the whole of it exists. Rebound rather than added to:
+        # /more reads it from the poll thread while this runs on the queue's,
+        # and a list being appended to is a list that can be read half built.
+        self._full = _within(lines, MORE_CHARS)
+        self._dropped = len(lines) - len(self._full)
         if not lines:
             self._paint(note="Nothing new appeared in the window - it may have "
                              "answered somewhere this cannot see.")
