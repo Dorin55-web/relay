@@ -165,9 +165,25 @@ print("\n--- opencode has no such fall-through ---")
 # Claude stopping to ask a question costs a notification; opencode stopping to
 # ask one may cost more, because if its prompt clears `esc interrupt` the
 # answer today is idle, and idle is the only state a queue will move on.
-for said in ("", "esc interrupt", "9.6K (1%) ctrl+p commands", "a screen of who knows"):
-    check(f"{(said or 'nothing at all')[:24]!r} is called one or the other",
+for said in ("esc interrupt", "9.6K (1%) ctrl+p commands", "a screen of who knows"):
+    check(f"{said[:24]!r} is called one or the other",
           state(oc, said) in (agent.BUSY, agent.IDLE), state(oc, said))
+
+
+print("\n--- but a window that published nothing is not 'finished' ---")
+# The half of that fall-through which could be closed without a measurement.
+# An absence rule is perfectly satisfied by an empty window, so an opencode
+# window whose accessibility tree had not been built yet - which happens, it is
+# why the probe warns you to take the first reading twice - used to read as
+# idle, and idle is the one state a queue moves on.
+for profile in agent.BUILT_IN:
+    check(f"{profile['name']}, read as nothing",
+          state(profile, "") == agent.UNKNOWN, state(profile, ""))
+    check(f"{profile['name']}, whitespace and no buttons",
+          state(profile, "   \n  \n") == agent.UNKNOWN, state(profile, "   \n  \n"))
+check("a button alone is still something to read",
+      state(BY_NAME["Antigravity"], "", ["Send message"]) == agent.IDLE,
+      state(BY_NAME["Antigravity"], "", ["Send message"]))
 
 
 print("\n--- the shape a waiting rule will have to have ---")
@@ -264,13 +280,20 @@ print("\n--- and no profile reads its own busy window as finished ---")
 # that hands the queue a window still working.
 
 
+# Something ordinary on screen, mentioned by no rule in any profile. A real
+# window always has content; a rule made only of absences would otherwise
+# describe an empty one, and an empty read is deliberately not a state.
+FILLER = "a line of ordinary window content"
+
+
 def window_the_rule_describes(rule):
     """The window a rule says it is looking at: what it asks to be present.
 
     Nothing is added for an `absent_` condition, which is the point - what a
-    rule wants gone is simply never put there.
+    rule wants gone is simply never put there. The filler stands in for
+    everything else the window has on it, which is never nothing.
     """
-    lines, buttons = [], []
+    lines, buttons = [FILLER], []
     for condition, wanted in (rule or {}).items():
         if condition == "text":
             # Buried in a longer line on purpose: `text` is a fragment rule and
@@ -285,6 +308,14 @@ def window_the_rule_describes(rule):
 
 for profile in agent.BUILT_IN:
     name = profile.get("name")
+
+    for rule_name in ("busy", "idle", "waiting"):
+        rule = profile.get(rule_name) or {}
+        for condition, wanted in rule.items():
+            if condition.startswith("absent"):
+                check(f"{name} {rule_name}: the filler does not trip {condition}",
+                      str(wanted).lower() not in FILLER.lower()
+                      and str(wanted).lower() != FILLER.lower(), str(wanted))
 
     text, buttons = window_the_rule_describes(profile.get("busy"))
     got = state(profile, text, buttons)

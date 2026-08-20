@@ -329,6 +329,16 @@ def state(hwnd, profile=None, seen=None):
     seen = seen if seen is not None else read(hwnd)
     text, buttons = seen["text"], seen["buttons"]
 
+    # A read that came back with nothing is not a state. An `absent_text` or
+    # `absent_button` condition is perfectly satisfied by an empty window, so a
+    # profile whose idle rule is the exact absence of its busy one - opencode
+    # has one - called a window that had published nothing "finished", and idle
+    # is the single state that lets a queue send. Chromium builds its
+    # accessibility tree lazily and the first read of a window really can come
+    # back empty, so this is a window that exists, not a hypothetical one.
+    if not text.strip() and not buttons:
+        return UNKNOWN
+
     if _matches(profile.get("busy"), text, buttons):
         return BUSY
     if _matches(profile.get("waiting"), text, buttons):
