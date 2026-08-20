@@ -151,6 +151,38 @@ check("and a check that will not run never stops the watch",
       keeper.another_keeper_running() is False)
 
 
+print("\n--- asking whether a keeper is watching, without becoming one ---")
+# Relay asks this before /restart quits. If asking claimed the name, the first
+# question would answer itself for ever after, and the promise "the keeper will
+# bring me back in a few seconds" would be true of nothing - which is how three
+# restarts in one evening left a laptop dark.
+keeper.KEEPER_MUTEX_NAME = f"Local\\relay-watch-test-{uuid.uuid4().hex}"
+check("nothing is watching", keeper.keeper_is_watching() is False)
+check("and asking did not make us the one watching",
+      keeper.keeper_is_watching() is False)
+
+name = f"Local\\relay-watch-test-{uuid.uuid4().hex}"
+keeper.KEEPER_MUTEX_NAME = name
+other = hold(name)
+try:
+    check("one held in another process is seen", keeper.keeper_is_watching() is True)
+finally:
+    other.terminate()
+    other.wait(timeout=10)
+gone = False
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    if not keeper.keeper_is_watching():
+        gone = True
+        break
+    time.sleep(0.05)
+check("and unseen the moment it goes", gone)
+
+keeper.KEEPER_MUTEX_NAME = None         # OpenMutexW will not take this
+check("a check that cannot be made is not a yes",
+      keeper.keeper_is_watching() is False)
+
+
 print("\n--- where the logon entry would go ---")
 startup = keeper.startup_folder()
 check("Windows named a folder", startup.is_dir(), str(startup))

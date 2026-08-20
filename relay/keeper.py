@@ -131,6 +131,24 @@ def relay_is_running():
     return True
 
 
+def keeper_is_watching():
+    """True while a keeper holds its name. Asks; never takes it.
+
+    Deliberately not another_keeper_running(), which claims the name when it is
+    free - that is right for a keeper deciding whether to start and wrong for
+    anybody else, because the asker would then hold the name and every later
+    check would answer yes about itself.
+    """
+    if sys.platform != "win32":
+        return False
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenMutexW(SYNCHRONIZE, False, KEEPER_MUTEX_NAME)
+    if not handle:
+        return False
+    kernel32.CloseHandle(handle)
+    return True
+
+
 _claim = None
 
 

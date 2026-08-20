@@ -80,7 +80,7 @@ class Api:
         raise AssertionError(f"unexpected method {method}")
 
 
-def make(chat_id=MINE, states=None, sent=None):
+def make(chat_id=MINE, states=None, sent=None, watched=True):
     tmp = Path(tempfile.mkdtemp(prefix="relay-remote-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -94,6 +94,9 @@ def make(chat_id=MINE, states=None, sent=None):
         log=lambda *_: None,
         api=api,
         is_window=lambda _h: alive["all"],
+        # Said, not looked up: whether a keeper is watching this machine is
+        # not a thing a test may depend on.
+        keeper_watching=lambda: watched,
     )
     bot.alive = alive
     bot.pilot.read_state = states or (lambda _h: agent.IDLE)
@@ -548,12 +551,30 @@ check("and tells Telegram it is done with that message first",
       api.confirmed == 7, str(api.confirmed))
 
 # Switching the lights off with nobody to turn them back on is worse than
-# being stuck, so this refuses rather than obeying.
-bot, api, sent, _ = make()
-bot.on_restart = None
+# being stuck, so this refuses rather than obeying. It used to test that a way
+# of quitting had been passed in, which is true whenever Relay is running at
+# all - so the promise "the keeper will bring me back in a few seconds" went
+# out with no keeper anywhere, three times in one evening, and the phone was
+# dead until somebody walked to the laptop.
+left = []
+remote_mod.RESTART_MARKER = Path(tempfile.mkdtemp()) / ".relay-restart"
+bot, api, sent, _ = make(watched=False)
+bot.on_restart = lambda: left.append(True)
 bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/restart"}})
-check("but not with no keeper running",
-      any("no keeper" in s for s in api.sent), str(api.sent))
+check("with nothing watching, it stays", left == [], str(left))
+check("and says why", any("Nothing is watching" in s for s in api.sent),
+      str(api.sent))
+check("telling you how to fix it for good",
+      any("--at-logon" in s for s in api.sent), str(api.sent))
+check("and it does not leave a marker for a restart that is not happening",
+      not remote_mod.RESTART_MARKER.exists())
+
+# A check that cannot be made is not a yes.
+bot, api, sent, _ = make()
+bot.keeper_watching = lambda: (_ for _ in ()).throw(OSError("cannot ask"))
+bot.on_restart = lambda: left.append(True)
+bot._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/restart"}})
+check("a check that raises is read as nothing watching", left == [], str(left))
 
 
 print("\n--- a warning has to be worth reading ---")

@@ -105,7 +105,8 @@ class Api:
         raise AssertionError(f"unexpected method {method}")
 
 
-def make(chat_id=MINE, translate=None, capture=None, target=HWND):
+def make(chat_id=MINE, translate=None, capture=None, target=HWND,
+         watched=True):
     tmp = Path(tempfile.mkdtemp(prefix="relay-replies-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -118,6 +119,7 @@ def make(chat_id=MINE, translate=None, capture=None, target=HWND):
         log=lambda *_: None,
         api=api,
         is_window=lambda _h: True,
+        keeper_watching=lambda: watched,
         translate=translate,
         # Standing in for the hop onto the GUI thread. What it hands back is
         # the shape the real one does: the bytes, or why there are none.
@@ -986,5 +988,45 @@ api.feed(text="/more")
 handle(bot, api)
 check("and /more has it", any("what it actually said this time" in s
                              for s in api.sent), str(api.sent[-1:])[:140])
+
+print("\n--- when nothing is watching, you are told before you need it ---")
+# The failure this closes is silent by nature. Relay comes back at logon by
+# itself because it has a Startup entry; the keeper has none, so it does not.
+# From the phone the two look identical until the evening you send /restart and
+# nothing answers - which happened three times in one evening before this.
+bot, api, sent = make(watched=False)
+bot._warn_if_unwatched()
+check("nothing at first, in case a keeper is still starting", api.sent == [],
+      str(api.sent))
+
+bot._started = time.time() - remote_mod.UNWATCHED_GRACE - 1
+bot._warn_if_unwatched()
+check("then it says so", any("Nothing is watching" in s for s in api.sent),
+      str(api.sent))
+check("and how to make it stick",
+      any("--at-logon" in s for s in api.sent), str(api.sent))
+
+before = len(api.sent)
+for _ in range(5):
+    bot._warn_if_unwatched()
+check("once, not once a poll", len(api.sent) == before, str(len(api.sent)))
+
+
+print("\n--- and when something is, it says nothing at all ---")
+bot, api, sent = make(watched=True)
+bot._started = time.time() - remote_mod.UNWATCHED_GRACE - 1
+for _ in range(5):
+    bot._warn_if_unwatched()
+check("silence", api.sent == [], str(api.sent))
+
+
+print("\n--- a check it cannot make counts as nothing watching ---")
+# The one direction that is safe to be wrong in: a warning you did not need
+# costs a line, and a restart into an empty room costs the evening.
+bot, api, sent = make()
+bot.keeper_watching = lambda: (_ for _ in ()).throw(OSError("cannot ask"))
+bot._started = time.time() - remote_mod.UNWATCHED_GRACE - 1
+bot._warn_if_unwatched()
+check("it warns", any("Nothing is watching" in s for s in api.sent), str(api.sent))
 
 sys.exit(report.finish())

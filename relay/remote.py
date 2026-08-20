@@ -30,6 +30,7 @@ from collections import deque
 from pathlib import Path
 
 from . import agent
+from . import keeper as keeper_mod
 from . import later
 from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
                         STARTING, STOPPED, WAITING)
@@ -108,6 +109,10 @@ PHOTO_TIMEOUT = 90
 # After a failure, wait before trying again, and wait longer each time. A
 # laptop that closes its lid on a train should not fill the log with one line
 # a second until it lands.
+# How long to give a keeper that started alongside this one to claim its
+# name before saying nothing is watching.
+UNWATCHED_GRACE = 25
+
 RETRY_START = 2
 RETRY_MAX = 60
 
@@ -555,7 +560,7 @@ class Remote:
 
     def __init__(self, settings, send, target_getter, log=print,
                  api=call_api, is_window=None, translate=None,
-                 on_restart=None, capture=None):
+                 on_restart=None, capture=None, keeper_watching=None):
         self.settings = settings
         self.target_getter = target_getter
         # Injected for the same reason the queue injects it: whether a
@@ -573,9 +578,16 @@ class Remote:
         # taken back up after a restart. See _find_remembered.
         self.remembered = settings.get("target") or None
         self.translate = translate
-        # How to leave, when asked to. None means nobody is watching for
-        # the gap, so /restart refuses rather than switching the lights off.
+        # How to leave, when asked to.
         self.on_restart = on_restart
+        # And whether anything would bring us back. Asked of Windows, not
+        # assumed: this used to test whether on_restart had been passed, which
+        # is true whenever Relay is running at all, so /restart promised "the
+        # keeper will bring me back in a few seconds" with no keeper anywhere
+        # and left the laptop dark. Measured three times in one evening.
+        self.keeper_watching = keeper_watching or keeper_mod.keeper_is_watching
+        # Said once, and only when there is nothing watching. See _run.
+        self._warned_unwatched = False
         # How to photograph a window. Handed in for the same reason leaving is:
         # a grab is a Qt call and Qt takes one only from the thread that owns
         # the windows, which is not this one. None means nobody here can take a
@@ -854,6 +866,8 @@ class Remote:
                     self.log(f"[remote] could not deal with a message: {exc}")
                     self.say("Something went wrong dealing with that message. "
                              "It has not been queued.")
+
+            self._warn_if_unwatched()
 
             try:
                 self._release_due()
@@ -1242,8 +1256,15 @@ class Remote:
         announce a death you had asked for.
         """
         if not self.on_restart:
-            self.say("There is no keeper running, so nothing would start me "
-                     "again. Leaving myself off is worse than being stuck.")
+            self.say("There is no way to quit from here, so /restart would "
+                     "leave you with nothing.")
+            return
+        if not self._watched():
+            self.say("Nothing is watching, so if I go now nothing brings me "
+                     "back and the phone goes dead until you are at the "
+                     "laptop.\n\nStart the keeper first, or put it in Startup "
+                     "so this cannot happen again:\n"
+                     "python -m relay.keeper --at-logon")
             return
         self.say("Restarting. The keeper will bring me back in a few seconds.")
         try:
@@ -1253,6 +1274,37 @@ class Remote:
         # Before leaving, not after: there is no after. See _confirm.
         self._confirm()
         self.on_restart()
+
+    def _watched(self):
+        """Whether a keeper is out there. Never raises: this gates leaving."""
+        try:
+            return bool(self.keeper_watching())
+        except Exception as exc:
+            self.log(f"[remote] could not tell whether a keeper is watching: {exc}")
+            return False
+
+    def _warn_if_unwatched(self):
+        """Say once, early, when nothing is watching.
+
+        The failure this exists for is silent by nature: Relay comes back by
+        itself at logon because it has a Startup entry, the keeper does not,
+        and the two look identical from the phone until the evening you send
+        /restart and nothing answers. One line at the start of a session costs
+        nothing on the sessions where it is fine.
+        """
+        if self._warned_unwatched or self._stop.is_set():
+            return
+        if time.time() - self._started < UNWATCHED_GRACE:
+            # A keeper started alongside this from the same Startup folder has
+            # not necessarily claimed its name yet.
+            return
+        self._warned_unwatched = True
+        if self._watched():
+            return
+        self.log("[remote] no keeper is watching")
+        self.say("Nothing is watching this. Relay is up, but if it stops, "
+                 "nothing brings it back and /restart will refuse.\n\n"
+                 "python -m relay.keeper --at-logon")
 
     def _target_command(self, which):
         """List the windows worth writing into, or pin one of them.
