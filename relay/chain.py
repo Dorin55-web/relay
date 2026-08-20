@@ -6,6 +6,11 @@ a convenience - the templates are skeletons with `<angle brackets>` in them,
 and a queue that sends them unfilled sends nonsense. The box underneath is
 where the chain actually gets written.
 
+Underneath is the shelf: name a chain, keep it, and take it down again next
+week. What is worth keeping is not the templates - those are already a click
+away - but the blanks you filled in and the order you settled on, which is the
+part that took the thinking. `chains.py` holds them.
+
 While it runs the window stays on top. It is the only place the countdown is
 visible and the only place with a Stop button, and the queue puts the window it
 is driving in front every time it sends - so a chain window that could be
@@ -20,10 +25,12 @@ someone else's machine.
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
-                               QListWidget, QListWidgetItem, QPlainTextEdit,
-                               QPushButton, QVBoxLayout)
+                               QLineEdit, QListWidget, QListWidgetItem,
+                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QVBoxLayout)
 
 from . import agent
+from . import chains as chains_mod
 from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
                         STARTING, STOPPED, WAITING)
 from .look_picker import BG, LINE, MUTED, PANEL, STYLESHEET, TEXT
@@ -35,6 +42,15 @@ _window = None
 # Only a window title and a process name, so this is cheap enough to do while
 # you are typing in the box above it.
 TARGET_REFRESH_MS = 1000
+
+# Three rows of the shelf, and three is the number this was argued down to. It
+# is something you take one off, not something you read down, and the two lists
+# above it are where this window's height belongs - a fourth list at full size
+# would take the space from the ones doing the work. Three rows only fit in
+# this many pixels because the shelf's own rows are tighter than theirs: at the
+# 5px of padding those carry, a row is 42px and this band showed one entry and
+# a sliver of the next, which reads as a list that is broken rather than short.
+SHELF_HEIGHT = 118
 
 PHRASES = {
     HOLDING: "waiting for it to finish",
@@ -60,6 +76,7 @@ class ChainWindow(FramelessWindow):
         self.target_getter = target_getter
         self.steps = []
         self.editing = -1
+        self.kept = []          # what is on the shelf, in the order it shows
 
         self.pilot = Autopilot(
             send=send,
@@ -71,6 +88,7 @@ class ChainWindow(FramelessWindow):
         self._build()
         self.setStyleSheet(STYLESHEET + EXTRA)
         self._fill_library()
+        self._fill_shelf()
         self._show_steps()
         self._show_target()
 
@@ -117,6 +135,40 @@ class ChainWindow(FramelessWindow):
         self.text.setFixedHeight(96)
         self.text.textChanged.connect(self._text_changed)
 
+        self.shelf = QListWidget()
+        self.shelf.setObjectName("shelf")
+        # The same gesture the templates list uses, so the shelf reads as the
+        # other place a step comes from rather than as a new kind of thing.
+        self.shelf.itemDoubleClicked.connect(lambda _item: self._load())
+        self.shelf.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.shelf.setFixedHeight(SHELF_HEIGHT)
+        self.shelf.currentRowChanged.connect(lambda _row: self._show_buttons())
+
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Name this chain")
+        self.name.setFixedWidth(200)
+        self.name.returnPressed.connect(self._save)
+        self.name.textChanged.connect(lambda _text: self._show_buttons())
+
+        self.save_btn = self._button("Keep", self._save)
+        self.load_btn = self._button("Load", self._load)
+
+        keep_buttons = QHBoxLayout()
+        keep_buttons.setSpacing(6)
+        keep_buttons.addWidget(self.save_btn)
+        keep_buttons.addWidget(self.load_btn)
+
+        keep = QVBoxLayout()
+        keep.setSpacing(6)
+        keep.addWidget(self.name)
+        keep.addLayout(keep_buttons)
+        keep.addStretch(1)
+
+        shelf_row = QHBoxLayout()
+        shelf_row.setSpacing(10)
+        shelf_row.addWidget(self.shelf, 1)
+        shelf_row.addLayout(keep)
+
         self.target = QLabel()
         self.target.setObjectName("hint")
 
@@ -143,6 +195,8 @@ class ChainWindow(FramelessWindow):
         body.addLayout(lists, 1)
         body.addWidget(self._caption("THIS STEP"))
         body.addWidget(self.text)
+        body.addWidget(self._caption("KEPT CHAINS"))
+        body.addLayout(shelf_row)
         body.addWidget(self.target)
         body.addLayout(footer)
 
@@ -152,7 +206,12 @@ class ChainWindow(FramelessWindow):
         outer.addWidget(TitleBar(self.windowTitle(), self.showMinimized,
                                  self.close))
         outer.addLayout(body, 1)
-        self.resize(720, 560)
+        # Taller by roughly what the shelf costs, so the two lists that do the
+        # building keep about the height they had. Not the whole of it: this
+        # is already the tallest window Relay has, and the last twenty pixels
+        # are cheaper taken off a templates list showing four and a half of
+        # ten than added to a window that has to fit on a laptop.
+        self.resize(720, 700)
 
     def _column(self, caption, widget, *extra):
         column = QVBoxLayout()
@@ -265,6 +324,114 @@ class ChainWindow(FramelessWindow):
         self.text.setReadOnly(running)
         self.start_btn.setText("Stop" if running else "Start")
         self.start_btn.setEnabled(running or bool(self.steps))
+        # Keeping stays offered while a chain runs. The steps are fixed by
+        # then, so writing them out takes nothing away - and "I should have
+        # kept that one" is a thought people have while watching it work.
+        # Loading does not: it would rewrite the list under the running queue.
+        self.save_btn.setEnabled(bool(self.steps)
+                                 and bool(self.name.text().strip()))
+        self.load_btn.setEnabled(not running and self.shelf.currentRow() >= 0)
+
+    # --- the shelf --------------------------------------------------------
+
+    def _fill_shelf(self, select=None):
+        """Redraw the shelf from the file, so it says what is actually kept.
+
+        `select` is the name to leave selected - the one just saved, which is
+        the one you are about to look at to check it landed.
+        """
+        self.kept = chains_mod.load()
+        self.shelf.blockSignals(True)
+        self.shelf.clear()
+        for chain in self.kept:
+            count = len(chain["steps"])
+            self.shelf.addItem(QListWidgetItem(
+                f"{chain['name']}   ({count} step{'' if count == 1 else 's'})"))
+        self.shelf.blockSignals(False)
+
+        wanted = (select or "").strip().casefold()
+        for i, chain in enumerate(self.kept):
+            if chain["name"].casefold() == wanted:
+                self.shelf.setCurrentRow(i)
+                break
+        else:
+            if self.kept:
+                self.shelf.setCurrentRow(0)
+        # Not left to the selection signal: an empty shelf changes no row, and
+        # Load would keep whatever state it had from the shelf before.
+        self._show_buttons()
+
+    def _save(self):
+        """Keep this chain under the name in the box. True when it was written.
+
+        Refusing is better than saving something that cannot come back: a
+        chain with no name cannot be asked for again, and one with no steps is
+        not a chain.
+        """
+        name = self.name.text().strip()
+        if not self.steps:
+            QMessageBox.warning(self, "Nothing to keep",
+                                "Add a step before keeping the chain.")
+            return False
+        if not name:
+            QMessageBox.warning(
+                self, "It needs a name",
+                "Type a name for this chain, so you can ask for it again.")
+            self.name.setFocus()
+            return False
+
+        if chains_mod.steps_for(name) is not None:
+            # Replacing is almost always what re-saving means, and it is also
+            # the one that loses work - so it is the one that asks.
+            answer = QMessageBox.question(
+                self, "Already kept",
+                f"There is already a chain called {name!r}.\n"
+                "Replace it with this one?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return False
+
+        if not chains_mod.save_chain(name, self.steps):
+            QMessageBox.critical(
+                self, "Could not keep it",
+                f"{chains_mod.CHAINS_PATH.name} could not be written.\n"
+                "Check the file is not open elsewhere, and that it still "
+                "reads as JSON.",
+            )
+            return False
+
+        self._fill_shelf(select=name)
+        self.status.setText(f"kept as {name!r}")
+        return True
+
+    def _load(self):
+        """Put a kept chain into the list, ready to start. True when one came."""
+        row = self.shelf.currentRow()
+        if self.pilot.running or not (0 <= row < len(self.kept)):
+            return False
+        chain = self.kept[row]
+
+        if self.steps:
+            # The shelf is reached with a double-click, which is one slip away
+            # from a chain you have spent ten minutes filling in.
+            answer = QMessageBox.question(
+                self, "Replace the chain?",
+                f"Load {chain['name']!r} over the {len(self.steps)} step(s) "
+                "already here?\nThey are gone unless you have kept them.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return False
+
+        self.steps = list(chain["steps"])
+        self.name.setText(chain["name"])
+        self._show_steps()
+        # At the top, not wherever the last selection happened to be: a chain
+        # you have just loaded is one you read from its first step.
+        self.chain.setCurrentRow(0)
+        self.status.setText(f"loaded {chain['name']!r}")
+        return True
 
     # --- the target -------------------------------------------------------
 
@@ -377,6 +544,10 @@ QListWidget {{
 }}
 QListWidget::item {{ padding: 5px 6px; border-radius: 4px; }}
 QListWidget::item:selected {{ background: {LINE}; color: {TEXT}; }}
+/* A kept chain is a name and a count, on one short line - it does not need
+   the breathing room a prompt does, and three rows of it only fit in the
+   shelf's band at this padding. */
+QListWidget#shelf::item {{ padding: 2px 6px; }}
 QPlainTextEdit {{
     background: {PANEL};
     border: 1px solid {LINE};
@@ -384,6 +555,15 @@ QPlainTextEdit {{
     padding: 8px;
     color: {TEXT};
 }}
+QLineEdit {{
+    background: {PANEL};
+    border: 1px solid {LINE};
+    border-radius: 6px;
+    padding: 7px 9px;
+    color: {TEXT};
+    selection-background-color: {LINE};
+}}
+QLineEdit:focus {{ border: 1px solid #3d4451; }}
 QPushButton#step {{
     background: {PANEL};
     border: 1px solid {LINE};
