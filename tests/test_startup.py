@@ -8,11 +8,21 @@ reports a death every five seconds - or, worse, never reports one at all.
 
 So this uses real mutexes and a real second process. There is no way to check
 that a handle disappears when a process dies without a process that dies.
+
+The logon entry is checked the same way round. The shortcut is written into a
+throwaway folder and read back through the Windows shell rather than through
+the code that wrote it - reading it back with the writer would only prove that
+agrees with itself - and the real Startup folder is listed before and after, so
+the suite can say it put nothing in it.
 """
+import contextlib
+import io
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from pathlib import Path
 
 import context  # noqa: E402,F401
 context.isolate_state()
@@ -23,6 +33,12 @@ report = context.Report()
 check = report.check
 
 WINDOWS = sys.platform == "win32"
+
+# The first twenty bytes of every .lnk: a header size of 0x4C and the shell
+# link class id. It is what Explorer looks at to decide a file is a shortcut
+# rather than something that merely ends in .lnk.
+LNK_HEADER = bytes.fromhex("4C000000") + bytes.fromhex(
+    "0114020000000000C000000000000046")
 
 # Holds a named mutex, says so, and waits to be killed.
 HOLDER = """
@@ -46,6 +62,15 @@ check("the same name, exactly", keeper.MUTEX_NAME == single_instance.MUTEX_NAME,
       f"{single_instance.MUTEX_NAME!r} vs {keeper.MUTEX_NAME!r}")
 check("and it is scoped to this logon session",
       single_instance.MUTEX_NAME.startswith("Local\\"), single_instance.MUTEX_NAME)
+
+# The nastiest way to get the keeper's own guard wrong: hold Relay's name, and
+# from then on answer your own liveness check for ever - a keeper that watches
+# happily and never reports a death.
+check("the keeper's own name is its own",
+      keeper.KEEPER_MUTEX_NAME != keeper.MUTEX_NAME,
+      f"{keeper.KEEPER_MUTEX_NAME!r} vs {keeper.MUTEX_NAME!r}")
+check("and scoped to this logon session too",
+      keeper.KEEPER_MUTEX_NAME.startswith("Local\\"), keeper.KEEPER_MUTEX_NAME)
 
 
 if not WINDOWS:
@@ -100,6 +125,127 @@ print("\n--- a failed check never blocks a start ---")
 single_instance.MUTEX_NAME = None       # CreateMutexW will not take this
 check("it says no rather than raising",
       single_instance.already_running() is False)
+
+
+print("\n--- and one keeper at a time, for the same reason ---")
+# Two keepers is two pollers on one Telegram bot, and Telegram gives each of
+# them half the messages at random - so /start works one time in two. With a
+# Startup entry as well as keeper.bat, two is one double-click away.
+keeper.KEEPER_MUTEX_NAME = f"Local\\relay-keeper-test-{uuid.uuid4().hex}"
+check("the first one may watch", keeper.another_keeper_running() is False)
+check("and the next finds the one it has just become",
+      keeper.another_keeper_running() is True)
+
+name = f"Local\\relay-keeper-test-{uuid.uuid4().hex}"
+keeper.KEEPER_MUTEX_NAME = name
+other = hold(name)
+try:
+    check("a keeper in another process is seen too",
+          keeper.another_keeper_running() is True)
+finally:
+    other.terminate()
+    other.wait(timeout=10)
+
+keeper.KEEPER_MUTEX_NAME = None         # CreateMutexW will not take this
+check("and a check that will not run never stops the watch",
+      keeper.another_keeper_running() is False)
+
+
+print("\n--- where the logon entry would go ---")
+startup = keeper.startup_folder()
+check("Windows named a folder", startup.is_dir(), str(startup))
+check("it is the Startup one", startup.name.lower() == "startup", str(startup))
+check("and it is yours rather than the machine's",
+      str(startup).lower().startswith(str(Path.home()).lower()), str(startup))
+before = sorted(p.name for p in startup.iterdir())
+
+
+print("\n--- writing one, into a folder that is not that one ---")
+
+
+def read_shortcut(path):
+    """What the Windows shell says is in a .lnk.
+
+    Asked of the shell rather than of the code that wrote the file: reading it
+    back with the writer would only prove the writer agrees with itself, and
+    the question is whether Explorer would show this as a shortcut at all.
+    """
+    quoted = "'" + str(path).replace("'", "''") + "'"
+    script = (f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({quoted}); "
+              "Write-Output $s.TargetPath; Write-Output $s.Arguments; "
+              "Write-Output $s.WorkingDirectory; Write-Output $s.WindowStyle")
+    done = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, errors="replace")
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+folder = Path(tempfile.mkdtemp(prefix="relay-startup-"))
+try:
+    made = keeper.install_at_logon(folder)
+    failed = None
+except Exception as exc:
+    made, failed = None, f"{type(exc).__name__}: {exc}"
+check("a shortcut was written", failed is None, str(failed))
+
+if made is not None:
+    check("in the folder it was given", made.parent == folder, str(made))
+    check("and Explorer would see a shortcut, not a file called .lnk",
+          made.read_bytes()[:20] == LNK_HEADER, made.read_bytes()[:20].hex())
+
+    read = read_shortcut(made)
+    check("the shell can read it back", len(read) == 4, str(read))
+
+if made is not None and len(read) == 4:
+    target, arguments, working, style = read
+    # pythonw.exe is the console-less twin. Started with python.exe, every
+    # logon would open a black window and leave it on the desktop all day.
+    check("this venv has a windowless interpreter",
+          Path(sys.executable).with_name("pythonw.exe").exists(), sys.executable)
+    check("and that is what the shortcut starts",
+          Path(target).name.lower() == "pythonw.exe", target)
+    check("it is the interpreter the keeper would use itself",
+          Path(target) == Path(keeper.launcher()), f"{target} vs {keeper.launcher()}")
+    check("running the keeper", arguments.strip() == "-m relay.keeper", arguments)
+    check("from the project folder", Path(working) == keeper.PROJECT_ROOT, working)
+    check("minimised as well, in case pythonw is ever missing",
+          style.strip() == "7", style)
+
+    keeper.install_at_logon(folder)
+    check("installing twice leaves one of it",
+          len(list(folder.iterdir())) == 1, str(list(folder.iterdir())))
+
+
+print("\n--- and taking it out is one file deleted ---")
+# The whole argument for a shortcut over a scheduled task: doing it by hand in
+# Explorer is the same operation, so nobody has to find the flag again.
+check("removed", keeper.remove_from_logon(folder) is True)
+check("the folder is empty again", list(folder.iterdir()) == [],
+      str(list(folder.iterdir())))
+check("and asking again says there was nothing to remove",
+      keeper.remove_from_logon(folder) is False)
+
+check("your own Startup folder was never touched",
+      sorted(p.name for p in startup.iterdir()) == before,
+      str(sorted(set(p.name for p in startup.iterdir()) ^ set(before))))
+
+
+print("\n--- and the help says how to undo it ---")
+usage = io.StringIO()
+try:
+    with contextlib.redirect_stdout(usage):
+        keeper.main(["--help"])
+    left = "it did not exit"
+except SystemExit as exc:
+    left = exc.code
+check("--help exits rather than starting a watch", left == 0, str(left))
+offered = usage.getvalue()
+check("--at-logon is offered", "--at-logon" in offered, offered[:80])
+check("--not-at-logon is offered", "--not-at-logon" in offered, offered[:80])
+check("it says deleting the file is enough", "delet" in offered.lower(),
+      offered[-200:])
+check("and says it is not a scheduled task", "task" in offered.lower(),
+      offered[-200:])
 
 
 print("\n--- the CUDA directories ---")
