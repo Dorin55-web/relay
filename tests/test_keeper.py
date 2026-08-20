@@ -249,4 +249,28 @@ keeper_mod.SETTINGS_PATH.write_text(_json.dumps({"token": "t", "chat_id": "111"}
 conf = keeper_mod.settings()
 check("a filled-in file", conf is not None and conf["chat_id"] == 111, str(conf))
 
+print("\n--- the keeper has an answer for everything Relay answers ---")
+# The keeper imports nothing from `relay`, so its list of commands is a second
+# copy of one - and a second copy is a thing that drifts. This test can see
+# both, which is the only reason writing it out over there is safe.
+from relay.remote import COMMANDS  # noqa: E402
+
+# What the keeper deals with itself, rather than saying "not running".
+ITS_OWN = ("/start", "/restart", "/status")
+for name, _what in COMMANDS:
+    command = f"/{name}"
+    check(f"{command}",
+          command in ITS_OWN or command in keeper_mod.ANSWERED_BY_RELAY)
+
+watcher, api, state = make(alive=False)
+watcher.was_alive = False
+for name, _what in COMMANDS:
+    api.feed(f"/{name}")
+watcher.tick()
+check("every one of them was answered", len(api.sent) == len(COMMANDS),
+      f"{len(api.sent)} of {len(COMMANDS)}")
+check("and none was mistaken for a prompt",
+      not any("not queued" in s for s in api.sent),
+      str([s[:40] for s in api.sent if "not queued" in s]))
+
 sys.exit(report.finish())
