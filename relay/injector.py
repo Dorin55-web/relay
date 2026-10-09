@@ -351,11 +351,27 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
 
 
 def cancel_task_in_window(target_hwnd=None) -> bool:
-    """Brings target window to the foreground and injects Ctrl+D to cancel active task."""
+    """Cancels active task by invoking the Cancel/Stop button via UIA, falling back to keystroke.
+
+    Invoking via UI Automation avoids sending raw keystrokes like Ctrl+D, which in
+    AntiGravity and VS Code toggles the Auxiliary Pane (Conversation History) when
+    keyboard focus is not specifically on the chat.
+    """
     target = target_hwnd or foreground_window()
-    if target:
-        focus_window(target)
-        time.sleep(0.08)
+    if not target:
+        return False
+
+    # 1. First, try finding and clicking the Cancel/Stop button directly via UI Automation.
+    try:
+        from . import uia
+        if uia.click_cancel_button(target):
+            return True
+    except Exception as exc:
+        print(f"[cancel] uia button click failed: {exc}")
+
+    # 2. Fallback: bring window to foreground and inject keystroke
+    focus_window(target)
+    time.sleep(0.08)
     try:
         with _keyboard.pressed(Key.ctrl):
             _keyboard.press("d")
@@ -364,5 +380,6 @@ def cancel_task_in_window(target_hwnd=None) -> bool:
     except Exception as exc:
         print(f"[cancel] could not send Ctrl+D: {exc}")
         return False
+
 
 

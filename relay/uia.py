@@ -35,6 +35,7 @@ IDS = {
     "UIA_NamePropertyId": 30005,
     "UIA_ControlTypePropertyId": 30003,
     "UIA_ButtonControlTypeId": 50000,
+    "UIA_InvokePatternId": 10000,
     "TreeScope_Descendants": 4,
 }
 
@@ -216,3 +217,83 @@ def focus_named_input(hwnd, name):
     except Exception as exc:
         print(f"[uia] could not focus {name!r}: {exc}")
         return False
+
+
+def click_cancel_button(hwnd, candidate_names=None):
+    """Find the cancel or stop task button in `hwnd` and invoke/click it.
+
+    Invoking the button directly via UI Automation avoids sending raw
+    keystrokes like Ctrl+D, which in AntiGravity and VS Code toggles the
+    Auxiliary Pane (Conversation History) when keyboard focus is not specifically
+    on the chat.
+    """
+    auto, UIA = _uia()
+    if auto is None or not hwnd:
+        return False
+
+    targets = [
+        "cancel (ctrl+d)",
+        "stop task",
+        "stop tasks",
+        "stop execution",
+        "stop generation",
+        "cancel",
+    ] if candidate_names is None else [n.lower() for n in candidate_names]
+
+    try:
+        root = auto.ElementFromHandle(hwnd)
+        condition = auto.CreatePropertyCondition(
+            _id(UIA, "UIA_ControlTypePropertyId"),
+            _id(UIA, "UIA_ButtonControlTypeId")
+        )
+        found = root.FindAll(_id(UIA, "TreeScope_Descendants"), condition)
+        if not found:
+            return False
+
+        matches = []
+        for i in range(found.Length):
+            try:
+                el = found.GetElement(i)
+                raw_name = el.CurrentName or ""
+                name = clean(raw_name).lower()
+                for priority, target in enumerate(targets):
+                    if target == name or target in name:
+                        matches.append((priority, el, raw_name))
+                        break
+            except Exception:
+                continue
+
+        if not matches:
+            return False
+
+        matches.sort(key=lambda m: m[0])
+        best_element = matches[0][1]
+
+        # 1. Try InvokePattern
+        try:
+            pattern = best_element.GetCurrentPattern(_id(UIA, "UIA_InvokePatternId"))
+            if pattern:
+                invoker = pattern.QueryInterface(UIA.IUIAutomationInvokePattern)
+                invoker.Invoke()
+                return True
+        except Exception:
+            pass
+
+        # 2. Try mouse click on center of bounding box
+        try:
+            rect = best_element.CurrentBoundingRectangle
+            if rect.right > rect.left and rect.bottom > rect.top:
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.SetCursorPos(cx, cy)
+                user32.mouse_event(0x0002, 0, 0, 0, 0)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)
+                return True
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"[uia] click_cancel_button failed: {exc}")
+    return False
+
