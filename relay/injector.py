@@ -257,9 +257,15 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
             return paste_text(step["text"], config, manage_clipboard=manage_clipboard, target_hwnd=target_hwnd, submit=submit)
         return False
 
-    raw_bytes = step.get("image_bytes")
-    if not raw_bytes:
-        print("[paste_hybrid] no image_bytes provided in photo step")
+    images = step.get("images")
+    if not images:
+        raw_bytes = step.get("image_bytes")
+        images = [raw_bytes] if raw_bytes else []
+    elif isinstance(images, bytes):
+        images = [images]
+
+    if not images:
+        print("[paste_hybrid] no image_bytes or images provided in photo step")
         return False
 
     caption = (step.get("caption") or "").strip() or DEFAULT_PHOTO_PROMPT
@@ -271,19 +277,29 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
 
     if is_terminal_window(target, profile):
         # Terminal branch:
-        # 1. Save image_bytes to inbox/img_{timestamp}_{uuid[:6]}.png
-        file_path = step.get("path")
-        if not file_path or not Path(file_path).exists():
-            inbox_dir = PROJECT_ROOT / "inbox"
-            inbox_dir.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            uid = uuid.uuid4().hex[:6]
-            file_path = inbox_dir / f"img_{ts}_{uid}.png"
-            file_path.write_bytes(raw_bytes)
-            step["path"] = str(file_path)
+        # Save images to inbox/img_{timestamp}_{uuid[:6]}_{idx}.png
+        inbox_dir = PROJECT_ROOT / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        uid = uuid.uuid4().hex[:6]
 
-        posix_path = Path(file_path).resolve().as_posix()
-        command = f'"{posix_path}" {caption}'
+        paths = step.get("paths")
+        if not paths:
+            file_path = step.get("path")
+            if file_path and Path(file_path).exists() and len(images) == 1:
+                paths = [file_path]
+            else:
+                paths = []
+                for i, img_bytes in enumerate(images):
+                    suffix = f"_{i}" if len(images) > 1 else ""
+                    fp = inbox_dir / f"img_{ts}_{uid}{suffix}.png"
+                    fp.write_bytes(img_bytes)
+                    paths.append(str(fp))
+            step["paths"] = paths
+            step["path"] = paths[0]
+
+        posix_paths = " ".join(f'"{Path(p).resolve().as_posix()}"' for p in paths)
+        command = f'{posix_paths} {caption}'
         return paste_text(command, config, manage_clipboard=manage_clipboard, target_hwnd=target_hwnd, submit=submit)
 
     # GUI branch:
@@ -308,21 +324,22 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
     original = save_clipboard(config) if manage_clipboard else None
 
     try:
-        # Step 1: Copy image & paste
-        if not copy_image_to_clipboard(raw_bytes):
-            print("[paste_hybrid] could not copy image to clipboard")
-            return False
+        # Step 1: Copy each image & paste sequentially
+        for idx, img_bytes in enumerate(images):
+            if not copy_image_to_clipboard(img_bytes):
+                print(f"[paste_hybrid] could not copy image {idx+1}/{len(images)} to clipboard")
+                return False
 
-        time.sleep(config.paste_delay_ms / 1000.0)
+            time.sleep(config.paste_delay_ms / 1000.0)
 
-        with _keyboard.pressed(Key.ctrl):
-            _keyboard.press("v")
-            _keyboard.release("v")
+            with _keyboard.pressed(Key.ctrl):
+                _keyboard.press("v")
+                _keyboard.release("v")
 
-        # Step 2: Settle delay for GUI app to render attachment chip (~0.30s)
-        time.sleep(0.30)
+            # Settle delay for GUI app to render attachment chip (~0.30s)
+            time.sleep(0.30)
 
-        # Step 3: Copy caption text to clipboard & paste
+        # Step 2: Copy caption text to clipboard & paste
         try:
             pyperclip.copy(caption)
         except Exception as exc:
@@ -335,7 +352,7 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
             _keyboard.press("v")
             _keyboard.release("v")
 
-        # Step 4: Submission
+        # Step 3: Submission
         if config.auto_enter if submit is None else submit:
             time.sleep(0.05)
             _keyboard.press(Key.enter)

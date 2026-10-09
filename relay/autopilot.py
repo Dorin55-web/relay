@@ -345,7 +345,10 @@ class Autopilot:
         if isinstance(text, str):
             preview = text
         elif isinstance(text, dict):
-            preview = text.get("caption") or text.get("type") or str({k: v for k, v in text.items() if k != "image_bytes"})
+            num_imgs = len(text.get("images", [])) if text.get("images") else (1 if text.get("image_bytes") else 0)
+            prefix = f"[{num_imgs} imgs] " if num_imgs > 1 else ""
+            caption = text.get("caption") or text.get("type") or str({k: v for k, v in text.items() if k not in ("image_bytes", "images")})
+            preview = f"{prefix}{caption}"
         else:
             preview = str(text)
         self.log(f"[auto] step {self.index + 1}/{len(self.steps)} -> {preview[:60]!r}")

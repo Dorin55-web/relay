@@ -115,6 +115,7 @@ HTTP_TIMEOUT = POLL_SECONDS + 15
 # most of the way there.
 PHOTO_TIMEOUT = 90
 DEFAULT_PHOTO_PROMPT = "Please analyze and explain the code/error in this image."
+MEDIA_GROUP_SETTLE_SECONDS = 0.8
 
 
 # After a failure, wait before trying again, and wait longer each time. A
@@ -656,6 +657,7 @@ class Remote:
         self._commands_published = False
         self._offline = False
         self._retry_delay = 1.0
+        self._media_groups = {}
 
     # --- outside world ---------------------------------------------------
 
@@ -677,6 +679,7 @@ class Remote:
         not hold shutdown up on a network that is not there.
         """
         self._stop.set()
+        self._media_groups.clear()
         if self.pilot.running or self.pending:
             self.pilot.stop(why)
             self.pending.clear()
@@ -952,6 +955,8 @@ class Remote:
                     self.say("Something went wrong dealing with that message. "
                              "It has not been queued.")
 
+            self._flush_media_groups()
+
             self._warn_if_unwatched()
 
             try:
@@ -970,10 +975,15 @@ class Remote:
                 self._paint(icon=ICON_STOPPED, head="could not start",
                             note=str(exc))
 
+            if self._media_groups:
+                if self._stop.wait(0.15):
+                    return
+
     def _poll(self):
+        timeout = 0 if self._media_groups else POLL_SECONDS
         updates = self.api(
             self.settings["token"], "getUpdates",
-            {"offset": self._offset, "timeout": POLL_SECONDS}) or []
+            {"offset": self._offset, "timeout": timeout}) or []
         for update in updates:
             self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
         return updates
@@ -1020,6 +1030,7 @@ class Remote:
         hwnd = (self.pilot.hwnd if self.pilot.running else None) or self._target()
         if self.pilot.running:
             self.pilot.stop("cancelled from phone")
+        self._media_groups.clear()
         self.pending.clear()
         self.pending_own_card = False
         try:
@@ -1096,7 +1107,23 @@ class Remote:
 
                 image_bytes = self._download(self.settings["token"], file_path)
 
+                media_group_id = message.get("media_group_id")
                 caption_raw = (message.get("caption") or "").strip()
+
+                if media_group_id:
+                    group = self._media_groups.setdefault(media_group_id, {
+                        "images": [],
+                        "captions": [],
+                        "first_seen": time.monotonic(),
+                        "last_seen": time.monotonic(),
+                        "chat": chat,
+                    })
+                    group["images"].append(image_bytes)
+                    group["last_seen"] = time.monotonic()
+                    if caption_raw and caption_raw not in group["captions"]:
+                        group["captions"].append(caption_raw)
+                    return
+
                 if caption_raw:
                     caption_en, _ = self._to_english(caption_raw)
                     caption_en = caption_en or DEFAULT_PHOTO_PROMPT
@@ -1105,6 +1132,7 @@ class Remote:
 
                 step = {
                     "type": "photo",
+                    "images": [image_bytes],
                     "image_bytes": image_bytes,
                     "caption": caption_en,
                 }
@@ -1194,6 +1222,7 @@ class Remote:
         elif command == "/cancel":
             self._cancel_task(from_command=True)
         elif command == "/stop":
+            self._media_groups.clear()
             self.pending.clear()
             if self.pilot.running:
                 self.pilot.stop("you stopped it from your phone")
@@ -1611,13 +1640,51 @@ class Remote:
         self.remembered = None
         save_setting(self.settings, "target", None)
 
+    def _flush_media_groups(self, force=False):
+        """Aggregate buffered media groups (photo albums) into single multi-image steps."""
+        if not self._media_groups:
+            return
+        now = time.monotonic()
+        to_flush = []
+        for mg_id, group in list(self._media_groups.items()):
+            if force or (now - group["last_seen"] >= MEDIA_GROUP_SETTLE_SECONDS):
+                to_flush.append(mg_id)
+
+        for mg_id in to_flush:
+            group = self._media_groups.pop(mg_id, None)
+            if not group or not group.get("images"):
+                continue
+
+            images = group["images"]
+            captions = group.get("captions") or []
+            if captions:
+                caption_raw = "\n".join(c for c in captions if c.strip())
+                caption_en, _ = self._to_english(caption_raw)
+                caption_en = caption_en or DEFAULT_PHOTO_PROMPT
+            else:
+                caption_en = DEFAULT_PHOTO_PROMPT
+
+            step = {
+                "type": "photo",
+                "images": images,
+                "image_bytes": images[0],
+                "caption": caption_en,
+            }
+            self.pending.append(step)
+            if self._card is not None and not self.pending_own_card:
+                self._new_card()
+            self.pending_own_card = True
+            count_str = f" ({len(images)} photos)" if len(images) > 1 else ""
+            self._prompts.append(f"📷{count_str} {caption_en}")
+            self._paint(icon=ICON_WORKING, head="waiting for a free window")
+
     def _drain(self):
         """Start a chain with everything waiting, once nothing else is running.
 
         Several messages sent in a row become one chain in the order they were
         sent, which is what makes a phone useful for more than a single line.
         """
-        if self.pilot.running or not self.pending:
+        if self._media_groups or self.pilot.running or not self.pending:
             return
         hwnd = self._target()
         steps = list(self.pending)

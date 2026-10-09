@@ -90,10 +90,12 @@ class Api:
     def card(self):
         return self.messages.get(len(self.sent), "")
 
-    def feed_photo(self, photo_sizes, caption=None, chat=MINE, update_id=None):
+    def feed_photo(self, photo_sizes, caption=None, chat=MINE, update_id=None, media_group_id=None):
         msg = {"chat": {"id": chat}, "photo": photo_sizes}
         if caption is not None:
             msg["caption"] = caption
+        if media_group_id is not None:
+            msg["media_group_id"] = media_group_id
         self.updates.append({
             "update_id": update_id if update_id is not None else len(self.updates) + 1,
             "message": msg,
@@ -822,6 +824,123 @@ if b_saved_path and Path(b_saved_path).exists():
         Path(b_saved_path).unlink()
     except Exception:
         pass
+
+
+print("\n--- Multi-Photo / Media Group (Album) Ingestion ---")
+bot_album, api_album, _, _ = make_bot()
+api_album.feed_photo(
+    [{"file_id": "album_pic_1", "width": 800, "height": 600, "file_size": 40000}],
+    caption="uite eroarea in ambele capturi",
+    media_group_id="album_grp_999",
+)
+api_album.feed_photo(
+    [{"file_id": "album_pic_2", "width": 800, "height": 600, "file_size": 45000}],
+    caption=None,
+    media_group_id="album_grp_999",
+)
+album_updates = bot_album._poll()
+check("two album updates received by poller", len(album_updates) == 2)
+bot_album._handle(album_updates[0])
+bot_album._handle(album_updates[1])
+
+check("media group is buffered and pending is not flushed yet",
+      len(bot_album._media_groups) == 1 and len(bot_album.pending) == 0)
+check("two images buffered in media group",
+      len(bot_album._media_groups["album_grp_999"]["images"]) == 2)
+check("caption captured from non-empty album item",
+      bot_album._media_groups["album_grp_999"]["captions"] == ["uite eroarea in ambele capturi"])
+
+bot_album._flush_media_groups(force=True)
+check("media group flushed into pending queue",
+      len(bot_album._media_groups) == 0 and len(bot_album.pending) == 1)
+flushed_step = bot_album.pending[0]
+check("flushed step has type photo", flushed_step.get("type") == "photo")
+check("flushed step contains 2 images in images list",
+      len(flushed_step.get("images", [])) == 2)
+check("flushed step retains image_bytes for backwards compatibility",
+      flushed_step.get("image_bytes") == SAMPLE_PNG)
+check("caption is preserved in flushed step",
+      flushed_step.get("caption") == "uite eroarea in ambele capturi")
+check("card prompt indicates 2 photos",
+      any("📷 (2 photos)" in p for p in bot_album._prompts))
+
+print("\n--- Multi-Photo GUI Injection (Sequential Paste + Enter) ---")
+clip_mp, keys_mp = rig_injector(front=GUI_HWND)
+config_mp = Config()
+copied_mp_images = []
+orig_copy_image = injector.copy_image_to_clipboard
+injector.copy_image_to_clipboard = lambda raw: (copied_mp_images.append(raw) or True)
+orig_is_term = injector.is_terminal_window
+injector.is_terminal_window = lambda hwnd, prof=None: False
+
+mp_step = {
+    "type": "photo",
+    "images": [SAMPLE_PNG, SAMPLE_PNG_2],
+    "caption": "Compare and fix these two UI glitches",
+}
+res_mp = paste_hybrid(mp_step, config_mp, target_hwnd=GUI_HWND, submit=True)
+check("paste_hybrid succeeds for multi-image step", res_mp is True)
+check("all images passed to copy_image_to_clipboard in order",
+      copied_mp_images == [SAMPLE_PNG, SAMPLE_PNG_2])
+check("three Ctrl+V operations sent (img1, img2, caption)",
+      "".join(keys_mp.keys).count("press v") == 3, f"Keys: {keys_mp.keys}")
+check("caption copied to clipboard and pasted",
+      clip_mp.writes[0] == "Compare and fix these two UI glitches")
+check("Enter key sent when submit=True", any("enter" in k.lower() for k in keys_mp.keys))
+
+print("\n--- Multi-Photo Terminal Injection (Multiple file paths) ---")
+clip_mpt, keys_mpt = rig_injector(front=TERM_HWND)
+config_mpt = Config()
+injector.is_terminal_window = lambda hwnd, prof=None: True
+
+mpt_step = {
+    "type": "photo",
+    "images": [SAMPLE_PNG, SAMPLE_PNG_2],
+    "caption": "Run diff tool on these files",
+}
+res_mpt = paste_hybrid(mpt_step, config_mpt, target_hwnd=TERM_HWND, submit=True)
+check("paste_hybrid succeeds for multi-image terminal step", res_mpt is True)
+mpt_paths = mpt_step.get("paths")
+check("two inbox files saved for terminal execution",
+      mpt_paths is not None and len(mpt_paths) == 2)
+if mpt_paths and len(mpt_paths) == 2:
+    check("first saved file content matches SAMPLE_PNG", Path(mpt_paths[0]).read_bytes() == SAMPLE_PNG)
+    check("second saved file content matches SAMPLE_PNG_2", Path(mpt_paths[1]).read_bytes() == SAMPLE_PNG_2)
+    p0 = Path(mpt_paths[0]).resolve().as_posix()
+    p1 = Path(mpt_paths[1]).resolve().as_posix()
+    expected_mpt_cmd = f'"{p0}" "{p1}" Run diff tool on these files'
+    check("command contains all quoted paths and caption",
+          clip_mpt.writes[0] == expected_mpt_cmd, str(clip_mpt.writes))
+    check("terminal received exactly one Ctrl+V", "".join(keys_mpt.keys).count("press v") == 1)
+    check("terminal received Enter key", any("enter" in k.lower() for k in keys_mpt.keys))
+    for p in mpt_paths:
+        try:
+            Path(p).unlink()
+        except Exception:
+            pass
+
+injector.copy_image_to_clipboard = orig_copy_image
+injector.is_terminal_window = orig_is_term
+
+print("\n--- Multi-Photo Cancellation & Stop Behavior ---")
+bot_c, api_c, _, _ = make_bot()
+api_c.feed_photo(
+    [{"file_id": "c_pic_1", "width": 800, "height": 600, "file_size": 40000}],
+    media_group_id="group_cancel_test",
+)
+bot_c._handle(bot_c._poll()[0])
+check("media group buffered before cancel", len(bot_c._media_groups) == 1)
+bot_c._cancel_task()
+check("media group cleared on cancel", len(bot_c._media_groups) == 0)
+
+api_c.feed_photo(
+    [{"file_id": "s_pic_1", "width": 800, "height": 600, "file_size": 40000}],
+    media_group_id="group_stop_test",
+)
+bot_c._handle(bot_c._poll()[0])
+check("media group buffered before /stop", len(bot_c._media_groups) == 1)
+bot_c._command("/stop")
+check("media group cleared on /stop", len(bot_c._media_groups) == 0)
 
 
 print("\n--- Summary ---")
