@@ -30,7 +30,7 @@
     "size": 67,
     "idle": {
       "look": "connecting",
-      "speed": 1.15
+      "speed": 1.11
     },
     "recording": {
       "look": "composing",
