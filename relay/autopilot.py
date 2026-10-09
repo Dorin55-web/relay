@@ -41,7 +41,7 @@ POLL_SECONDS = 1.0
 # between their own turns and a single look into that gap reads as finished.
 SETTLE_POLLS = 2
 
-COUNTDOWN_SECONDS = 5
+COUNTDOWN_SECONDS = 3
 
 # How long to wait after sending for the agent to visibly pick the work up.
 # If it never does, the paste did not land, and continuing would talk into a
