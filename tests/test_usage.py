@@ -312,7 +312,9 @@ check("cached run yields identical tokens without file", metrics_cached["tokens_
 empty_scanner = usage.LocalMetricsScanner(root_dir=tmp_db_dir / "non_existent_folder")
 empty_metrics = empty_scanner.get_metrics()
 check("missing DB returns zero metrics cleanly",
-      empty_metrics == {"steps_4h": 0, "tokens_4h": 0, "steps_7d": 0, "tokens_7d": 0})
+      empty_metrics["steps_cycle"] == 0 and empty_metrics["tokens_cycle"] == 0
+      and empty_metrics["steps_7d"] == 0 and empty_metrics["tokens_7d"] == 0
+      and empty_metrics["steps_30d"] == 0 and empty_metrics["tokens_30d"] == 0)
 
 
 print("\n--- 6. Resilient Offline Fallback & Error Resilience ---")
@@ -334,8 +336,9 @@ check("offline data retains local tokens_4h", offline_data["tokens_4h"] == 1200)
 offline_card = usage.format_usage_card(data=offline_data)
 check("offline card contains header", "📊 <b>AI Usage &amp; Quota</b>" in offline_card)
 check("offline card shows Offline status indicator", "• Status: ⚪ Offline (AntiGravity closed)" in offline_card)
-check("offline card displays 4h steps and tokens", "• Last 4 Hours: 10 steps · 1.2k tokens" in offline_card)
+check("offline card displays current window steps and tokens", "• Current Window: 10 steps · 1.2k tokens" in offline_card)
 check("offline card displays 7d steps and tokens", "• Last 7 Days: 30 steps · 4.7k tokens" in offline_card)
+check("offline card displays 30d steps and tokens", "• Last 30 Days: 80 steps · 15.7k tokens" in offline_card)
 check("offline card is valid Telegram HTML", is_valid_telegram_html(offline_card))
 
 
@@ -345,16 +348,20 @@ online_data = {
     "remaining_fraction": 0.400022,
     "reset_time": "2026-10-09T19:27:19Z",
     "countdown": "2h 21m",
-    "steps_4h": 2222,
-    "tokens_4h": 10628165,
+    "elapsed": "2h 39m",
+    "steps_cycle": 2222,
+    "tokens_cycle": 10628165,
     "steps_7d": 6426,
     "tokens_7d": 38400000,
+    "steps_30d": 12850,
+    "tokens_30d": 75000000,
 }
 online_card = usage.format_usage_card(data=online_data)
 check("online card contains header", "📊 <b>AI Usage &amp; Quota</b>" in online_card)
 check("online card contains progress bar", "[████░░░░░░] 40.0% · Resets in 2h 21m" in online_card)
-check("online card contains 4h activity", "• Last 4 Hours: 2,222 steps · 10.6M tokens" in online_card)
+check("online card contains current window activity", "• Current Window (2h 39m): 2,222 steps · 10.6M tokens" in online_card)
 check("online card contains 7d activity", "• Last 7 Days: 6,426 steps · 38.4M tokens" in online_card)
+check("online card contains 30d activity", "• Last 30 Days: 12,850 steps · 75.0M tokens" in online_card)
 check("online card is valid Telegram HTML", is_valid_telegram_html(online_card))
 
 

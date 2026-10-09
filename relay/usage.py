@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple, Union
 CONNECT_RPC_PATH = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
 CONNECT_PROTOCOL_VERSION = "1"
 HTTP_TIMEOUT = 1.0
+TOTAL_CYCLE_HOURS = 5.0
 
 # In-memory token cache keyed by (conv_id, step_count) -> total_tokens
 _TOKEN_CACHE: Dict[Tuple[str, int], int] = {}
@@ -497,12 +498,28 @@ class LanguageServerClient:
             return {"online": False}
 
         remaining_fraction, reset_time = quota
+        reset_dt = parse_iso_datetime(reset_time)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cycle_start_dt = None
+        elapsed_str = ""
+        if reset_dt:
+            cycle_start_dt = reset_dt - datetime.timedelta(hours=TOTAL_CYCLE_HOURS)
+            elapsed_seconds = max(0, int((now - cycle_start_dt).total_seconds()))
+            if elapsed_seconds < 3600:
+                elapsed_str = f"{elapsed_seconds // 60}m"
+            else:
+                h = elapsed_seconds // 3600
+                m = (elapsed_seconds % 3600) // 60
+                elapsed_str = f"{h}h {m}m"
+
         return {
             "online": True,
             "remaining_fraction": remaining_fraction,
             "percentage": remaining_fraction * 100.0,
             "reset_time": reset_time,
-            "countdown": format_countdown(reset_time),
+            "countdown": format_countdown(reset_time, now=now),
+            "cycle_start": cycle_start_dt,
+            "elapsed": elapsed_str,
         }
 
 
@@ -515,16 +532,25 @@ class LocalMetricsScanner:
         else:
             self.root_dir = Path.home() / ".gemini" / "antigravity"
 
-    def get_metrics(self, hours_4: float = 4.0, days_7: float = 7.0) -> dict:
-        """Aggregate steps and tokens for 4-hour and 7-day windows."""
+    def get_metrics(self, cycle_start: Optional[datetime.datetime] = None,
+                    days_7: float = 7.0, days_30: float = 30.0,
+                    hours_4: Optional[float] = None) -> dict:
+        """Aggregate steps and tokens for current cycle window, 7-day, and 30-day windows."""
         summary_db = self.root_dir / "conversation_summaries.db"
         if not summary_db.exists():
-            return {"steps_4h": 0, "tokens_4h": 0, "steps_7d": 0, "tokens_7d": 0}
+            return {
+                "steps_cycle": 0, "tokens_cycle": 0,
+                "steps_7d": 0, "tokens_7d": 0,
+                "steps_30d": 0, "tokens_30d": 0,
+                "steps_4h": 0, "tokens_4h": 0,
+            }
 
-        convs_4h: List[Tuple[str, int]] = []
+        convs_cycle: List[Tuple[str, int]] = []
         convs_7d: List[Tuple[str, int]] = []
-        steps_4h = 0
+        convs_30d: List[Tuple[str, int]] = []
+        steps_cycle = 0
         steps_7d = 0
+        steps_30d = 0
 
         try:
             conn = sqlite3.connect(f"file:{summary_db.as_posix()}?mode=ro", uri=True)
@@ -534,11 +560,20 @@ class LocalMetricsScanner:
             rows = cur.fetchall()
             conn.close()
         except Exception:
-            return {"steps_4h": 0, "tokens_4h": 0, "steps_7d": 0, "tokens_7d": 0}
+            return {
+                "steps_cycle": 0, "tokens_cycle": 0,
+                "steps_7d": 0, "tokens_7d": 0,
+                "steps_30d": 0, "tokens_30d": 0,
+                "steps_4h": 0, "tokens_4h": 0,
+            }
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        limit_4h = hours_4 * 3600
+        if cycle_start is None:
+            cycle_hours = hours_4 if hours_4 is not None else TOTAL_CYCLE_HOURS
+            cycle_start = now - datetime.timedelta(hours=cycle_hours)
+
         limit_7d = days_7 * 86400
+        limit_30d = days_30 * 86400
 
         for cid, st, lmt in rows:
             if not lmt:
@@ -548,22 +583,30 @@ class LocalMetricsScanner:
                 continue
             age = (now - dt).total_seconds()
             steps = int(st or 0)
-            if 0 <= age <= limit_4h:
-                steps_4h += steps
-                convs_4h.append((cid, steps))
+            if dt >= cycle_start and age >= 0:
+                steps_cycle += steps
+                convs_cycle.append((cid, steps))
             if 0 <= age <= limit_7d:
                 steps_7d += steps
                 convs_7d.append((cid, steps))
+            if 0 <= age <= limit_30d:
+                steps_30d += steps
+                convs_30d.append((cid, steps))
 
         # Scan and aggregate tokens using cached results
-        tokens_4h = self.get_tokens_for_conversations(convs_4h)
+        tokens_cycle = self.get_tokens_for_conversations(convs_cycle)
         tokens_7d = self.get_tokens_for_conversations(convs_7d)
+        tokens_30d = self.get_tokens_for_conversations(convs_30d)
 
         return {
-            "steps_4h": steps_4h,
-            "tokens_4h": tokens_4h,
+            "steps_cycle": steps_cycle,
+            "tokens_cycle": tokens_cycle,
             "steps_7d": steps_7d,
             "tokens_7d": tokens_7d,
+            "steps_30d": steps_30d,
+            "tokens_30d": tokens_30d,
+            "steps_4h": steps_cycle,
+            "tokens_4h": tokens_cycle,
         }
 
     def get_tokens_for_conversations(self, convs: List[Tuple[str, int]]) -> int:
@@ -608,7 +651,8 @@ def get_usage_data(client: Optional[LanguageServerClient] = None,
         scanner = LocalMetricsScanner()
 
     status = client.get_status()
-    metrics = scanner.get_metrics()
+    cycle_start = status.get("cycle_start")
+    metrics = scanner.get_metrics(cycle_start=cycle_start)
 
     online = bool(status.get("online", False))
     return {
@@ -616,10 +660,16 @@ def get_usage_data(client: Optional[LanguageServerClient] = None,
         "remaining_fraction": float(status.get("remaining_fraction", 0.0)) if online else 0.0,
         "reset_time": str(status.get("reset_time", "")) if online else "",
         "countdown": str(status.get("countdown", "")) if online else "",
-        "steps_4h": int(metrics.get("steps_4h", 0)),
-        "tokens_4h": int(metrics.get("tokens_4h", 0)),
+        "elapsed": str(status.get("elapsed", "")) if online else "",
+        "steps_cycle": int(metrics.get("steps_cycle", 0)),
+        "tokens_cycle": int(metrics.get("tokens_cycle", 0)),
         "steps_7d": int(metrics.get("steps_7d", 0)),
         "tokens_7d": int(metrics.get("tokens_7d", 0)),
+        "steps_30d": int(metrics.get("steps_30d", 0)),
+        "tokens_30d": int(metrics.get("tokens_30d", 0)),
+        # Backwards-compatibility aliases
+        "steps_4h": int(metrics.get("steps_cycle", 0)),
+        "tokens_4h": int(metrics.get("tokens_cycle", 0)),
     }
 
 
@@ -641,17 +691,23 @@ def format_usage_card(data: Optional[dict] = None,
     else:
         quota_line = "• Status: ⚪ Offline (AntiGravity closed)"
 
-    steps_4h = data.get("steps_4h", 0)
-    tokens_4h = data.get("tokens_4h", 0)
+    elapsed = data.get("elapsed")
+    cycle_label = f"Current Window ({html.escape(elapsed)})" if elapsed else "Current Window"
+
+    steps_cycle = data.get("steps_cycle", data.get("steps_4h", 0))
+    tokens_cycle = data.get("tokens_cycle", data.get("tokens_4h", 0))
     steps_7d = data.get("steps_7d", 0)
     tokens_7d = data.get("tokens_7d", 0)
+    steps_30d = data.get("steps_30d", 0)
+    tokens_30d = data.get("tokens_30d", 0)
 
     card = (
         "📊 <b>AI Usage &amp; Quota</b>\n\n"
         "<b>Live Quota:</b>\n"
         f"{quota_line}\n\n"
         "<b>Activity:</b>\n"
-        f"• Last 4 Hours: {format_steps(steps_4h)} · {format_tokens(tokens_4h)}\n"
-        f"• Last 7 Days: {format_steps(steps_7d)} · {format_tokens(tokens_7d)}"
+        f"• {cycle_label}: {format_steps(steps_cycle)} · {format_tokens(tokens_cycle)}\n"
+        f"• Last 7 Days: {format_steps(steps_7d)} · {format_tokens(tokens_7d)}\n"
+        f"• Last 30 Days: {format_steps(steps_30d)} · {format_tokens(tokens_30d)}"
     )
     return card
