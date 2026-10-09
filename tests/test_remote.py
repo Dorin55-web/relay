@@ -41,6 +41,9 @@ class Api:
         self.updates = []
         self.sent = []          # every sendMessage, in order
         self.edits = []         # every editMessageText, in order
+        self.sent_markups = []  # reply_markup for each sendMessage
+        self.edited_markups = [] # reply_markup for each editMessageText
+        self.answered_callbacks = [] # calls to answerCallbackQuery
         self.messages = {}      # id -> what it now says
         self.confirmed = None   # the offset it last said it was done with
         self.published = None   # the command list it registered
@@ -57,6 +60,17 @@ class Api:
             "message": {"chat": {"id": chat}, "text": text},
         })
 
+    def feed_callback(self, query_id="cq_1", data="cancel_task", chat=MINE, update_id=None):
+        self.updates.append({
+            "update_id": update_id if update_id is not None else len(self.updates) + 1,
+            "callback_query": {
+                "id": query_id,
+                "from": {"id": chat, "first_name": "User"},
+                "message": {"message_id": len(self.sent), "chat": {"id": chat}},
+                "data": data,
+            },
+        })
+
     def __call__(self, token, method, params, timeout=None):
         self.calls += 1
         if method == "getUpdates":
@@ -71,19 +85,24 @@ class Api:
             return True
         if method == "sendMessage":
             self.sent.append(params["text"])
+            self.sent_markups.append(params.get("reply_markup"))
             self.messages[len(self.sent)] = params["text"]
             return {"message_id": len(self.sent)}
         if method == "editMessageText":
             self.edits.append(params["text"])
+            self.edited_markups.append(params.get("reply_markup"))
             self.messages[params["message_id"]] = params["text"]
             return {}
         if method == "sendPhoto":
             self.sent.append(params.get("caption", ""))
             return {"message_id": len(self.sent)}
+        if method == "answerCallbackQuery":
+            self.answered_callbacks.append(params)
+            return True
         raise AssertionError(f"unexpected method {method}")
 
 
-def make(chat_id=MINE, states=None, sent=None, watched=True):
+def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None):
     tmp = Path(tempfile.mkdtemp(prefix="relay-remote-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -100,6 +119,7 @@ def make(chat_id=MINE, states=None, sent=None, watched=True):
         # Said, not looked up: whether a keeper is watching this machine is
         # not a thing a test may depend on.
         keeper_watching=lambda: watched,
+        canceller=canceller,
     )
     bot.alive = alive
     bot.pilot.read_state = states or (lambda _h: agent.IDLE)
@@ -712,5 +732,142 @@ bot._offline = False
 if not bot._commands_published:
     bot.publish_commands()
 check("commands published once connection restored", bot._commands_published is True and bot.api.published is not None)
+
+print("\n--- Milestone 1: Dynamic Cancel Task button and /cancel command ---")
+
+# 1. Progress card displays '🛑 Cancel Task' inline button when active/busy
+for phase in (remote_mod.SENDING, remote_mod.STARTING, remote_mod.HOLDING,
+              remote_mod.COUNTING, remote_mod.WAITING):
+    b, a, _, _ = make()
+    b._where = "Antigravity"
+    b._progress(phase, 0, 1, 5)
+    last_markup = (a.edited_markups[-1] if a.edited_markups else a.sent_markups[-1])
+    parsed = json.loads(last_markup) if last_markup else {}
+    button_text = parsed.get("inline_keyboard", [[{}]])[0][0].get("text", "")
+    button_cb = parsed.get("inline_keyboard", [[{}]])[0][0].get("callback_data", "")
+    check(f"card has cancel button during {phase}",
+          button_cb == "cancel_task" and "Cancel Task" in button_text,
+          str(last_markup))
+
+# 2. Progress card removes button on DONE and STOPPED
+bot, api, sent, _ = make()
+bot._where = "Antigravity"
+bot._progress(remote_mod.HOLDING, 0, 1, None)
+check("button present while holding",
+      api.sent_markups and "cancel_task" in (api.sent_markups[-1] or ""))
+
+bot._progress(remote_mod.DONE, 0, 1, None)
+check("button removed on DONE",
+      api.edited_markups and api.edited_markups[-1] is None,
+      str(api.edited_markups))
+
+# Re-activate and test STOPPED
+bot._progress(remote_mod.HOLDING, 0, 1, None)
+check("button restored when holding again",
+      api.edited_markups and "cancel_task" in (api.edited_markups[-1] or ""))
+
+bot._progress(remote_mod.STOPPED, 0, 1, None)
+check("button removed on STOPPED",
+      api.edited_markups and api.edited_markups[-1] is None,
+      str(api.edited_markups))
+
+# 3. Tapping inline button (callback_query) cancels task and calls canceller
+cancelled_hwnds = []
+def mock_canceller(h):
+    cancelled_hwnds.append(h)
+    return True
+
+bot, api, sent, _ = make(canceller=mock_canceller)
+bot._where = "Antigravity"
+bot.pilot.start(["step 1"], HWND)
+check("pilot is running", bot.pilot.running is True)
+
+# User taps cancel button on phone
+api.feed_callback(query_id="cq_test_1", data="cancel_task", chat=MINE)
+bot._handle(api.updates.pop())
+check("canceller was called with target hwnd", cancelled_hwnds == [HWND], str(cancelled_hwnds))
+check("autopilot stop signal set", bot.pilot._stop.is_set())
+deadline = time.monotonic() + 1
+while bot.pilot.running and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("autopilot thread stopped", bot.pilot.running is False)
+check("pending queue is empty", len(bot.pending) == 0)
+check("callback query was answered immediately",
+      any(c.get("callback_query_id") == "cq_test_1" for c in api.answered_callbacks),
+      str(api.answered_callbacks))
+card_text = api.messages.get(bot._card, "")
+check("card indicates cancelled", "cancelled" in card_text, card_text)
+check("card has stopped icon", card_text.startswith(remote_mod.ICON_STOPPED), card_text[:20])
+check("cancel button was removed after callback cancellation",
+      api.edited_markups and api.edited_markups[-1] is None,
+      str(api.edited_markups))
+
+# 4. Sending /cancel command cancels task and calls canceller
+cancelled_hwnds.clear()
+bot, api, sent, _ = make(canceller=mock_canceller)
+bot._where = "Antigravity"
+bot.pilot.start(["step 1"], HWND)
+check("pilot is running before /cancel", bot.pilot.running is True)
+
+api.feed("/cancel", chat=MINE)
+bot._handle(api.updates.pop())
+check("/cancel invoked canceller with target hwnd", cancelled_hwnds == [HWND], str(cancelled_hwnds))
+check("autopilot stop signal set by /cancel", bot.pilot._stop.is_set())
+deadline = time.monotonic() + 1
+while bot.pilot.running and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("autopilot thread stopped by /cancel", bot.pilot.running is False)
+check("chat reply confirmed cancellation", any("Task cancelled." in s for s in api.sent), str(api.sent))
+card_text = api.messages.get(bot._card, "")
+check("card indicates cancelled after /cancel", "cancelled" in card_text, card_text)
+check("cancel button was removed after /cancel",
+      api.edited_markups and api.edited_markups[-1] is None,
+      str(api.edited_markups))
+
+# 5. Unauthorized callback queries are ignored
+cancelled_hwnds.clear()
+bot, api, sent, _ = make(canceller=mock_canceller)
+api.feed_callback(query_id="cq_unauth", data="cancel_task", chat=THEIRS)
+bot._handle(api.updates.pop())
+check("unauthorized callback does not invoke canceller", cancelled_hwnds == [], str(cancelled_hwnds))
+check("unauthorized callback query is not answered", api.answered_callbacks == [], str(api.answered_callbacks))
+
+# 6. Callback query with unknown data is safely acknowledged without cancelling
+cancelled_hwnds.clear()
+bot, api, sent, _ = make(canceller=mock_canceller)
+api.feed_callback(query_id="cq_unknown", data="other_action", chat=MINE)
+bot._handle(api.updates.pop())
+check("unknown callback data does not invoke canceller", cancelled_hwnds == [], str(cancelled_hwnds))
+check("callback query was still acknowledged",
+      any(c.get("callback_query_id") == "cq_unknown" for c in api.answered_callbacks),
+      str(api.answered_callbacks))
+
+# 7. Drain starts pilot with cancel_button=True
+bot, api, sent, _ = make()
+bot.pending.append("do something")
+bot._drain()
+bot.pilot.stop()
+check("drain passes cancel button to initial paint",
+      api.sent_markups and "cancel_task" in (api.sent_markups[0] or ""),
+      str(api.sent_markups))
+
+print("\n--- Milestone 2: /usage command and quota monitoring ---")
+# 8. usage command is published in setMyCommands
+bot, api, sent, _ = make()
+bot.publish_commands()
+check("usage command is published to setMyCommands",
+      api.published and any(cmd.get("command") == "usage" for cmd in api.published),
+      str(api.published))
+
+# 9. /usage command sends formatted usage card
+api.feed("/usage", chat=MINE)
+bot._handle(api.updates.pop())
+check("/usage command sent a reply", len(api.sent) >= 1)
+check("/usage reply contains AI Usage & Quota header",
+      any("AI Usage &amp; Quota" in s or "AI Usage & Quota" in s for s in api.sent),
+      str(api.sent))
+check("/usage reply contains Live Quota and Activity",
+      any("Live Quota" in s and "Activity" in s for s in api.sent),
+      str(api.sent))
 
 sys.exit(report.finish())

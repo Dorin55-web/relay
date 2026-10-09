@@ -349,3 +349,20 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
         if manage_clipboard:
             restore_clipboard(original, config)
 
+
+def cancel_task_in_window(target_hwnd=None) -> bool:
+    """Brings target window to the foreground and injects Ctrl+D to cancel active task."""
+    target = target_hwnd or foreground_window()
+    if target:
+        focus_window(target)
+        time.sleep(0.08)
+    try:
+        with _keyboard.pressed(Key.ctrl):
+            _keyboard.press("d")
+            _keyboard.release("d")
+        return True
+    except Exception as exc:
+        print(f"[cancel] could not send Ctrl+D: {exc}")
+        return False
+
+

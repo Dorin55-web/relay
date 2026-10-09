@@ -34,6 +34,7 @@ from . import keeper as keeper_mod
 from . import later
 from .autopilot import (Autopilot, COUNTING, DONE, HOLDING, SENDING,
                         STARTING, STOPPED, WAITING)
+from .injector import cancel_task_in_window
 from .target import foreground_window, window_title
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +60,12 @@ KEYBOARD = {
 }
 NO_KEYBOARD = {"remove_keyboard": True}
 
+CANCEL_KEYBOARD = {
+    "inline_keyboard": [
+        [{"text": "🛑 Cancel Task", "callback_data": "cancel_task"}]
+    ]
+}
+
 # Every command, in one place.
 #
 # Registered with Telegram so that typing "/" opens the list by itself, and
@@ -69,10 +76,12 @@ NO_KEYBOARD = {"remove_keyboard": True}
 # answers, and that is the moment you most need to be told the command exists.
 COMMANDS = (
     ("status", "What it can see right now"),
+    ("usage", "Quota and token activity"),
     ("more", "The whole of the last result, not just the card"),
     ("shot", "A picture of the window"),
     ("target", "Choose which window to write into"),
     ("at", "Send a prompt later - /at 05:00 read the log"),
+    ("cancel", "Cancel active task (Ctrl+D)"),
     ("stop", "Cancel the queue"),
     ("restart", "Quit and come straight back"),
     ("start", "Start Relay when it is not running"),
@@ -572,9 +581,10 @@ class Remote:
     def __init__(self, settings, send, target_getter, log=print,
                  api=call_api, is_window=None, translate=None,
                  on_restart=None, capture=None, keeper_watching=None,
-                 downloader=None):
+                 downloader=None, canceller=None):
         self.settings = settings
         self.target_getter = target_getter
+        self.canceller = canceller or cancel_task_in_window
         # Injected for the same reason the queue injects it: whether a
         # window still exists is a question for Windows, and a test cannot
         # conjure a real one to ask about.
@@ -673,8 +683,9 @@ class Remote:
             self._icon, self._head = ICON_STOPPED, why
             self._note = ("Whatever was waiting is lost. Send it again once "
                           "Relay is back.")
+            self._cancel_button = False
             try:
-                self.edit(self._card, self._render(), timeout=6)
+                self.edit(self._card, self._render(), timeout=6, reply_markup=None)
             except Exception:
                 pass
 
@@ -682,7 +693,7 @@ class Remote:
     def chat_id(self):
         return self.settings.get("chat_id")
 
-    def say(self, text, keys=False, html=False):
+    def say(self, text, keys=False, html=False, reply_markup=None):
         """Send a message. Returns its id, so it can be edited later.
 
         Escaped on the way out unless the caller has already done it. Nearly
@@ -696,7 +707,11 @@ class Remote:
         params = {"chat_id": self.chat_id,
                   "text": text[:MESSAGE_CHARS] if html else _fit(text),
                   "parse_mode": "HTML"}
-        if keys is True:
+        if reply_markup is not None:
+            params["reply_markup"] = (json.dumps(reply_markup)
+                                      if isinstance(reply_markup, (dict, list))
+                                      else reply_markup)
+        elif keys is True:
             params["reply_markup"] = json.dumps(KEYBOARD)
         elif keys == "remove":
             params["reply_markup"] = json.dumps(NO_KEYBOARD)
@@ -745,16 +760,21 @@ class Remote:
                 return None
         return None
 
-    def edit(self, message_id, text, timeout=20):
+    def edit(self, message_id, text, timeout=20, reply_markup=None):
         """Rewrite a message already sent. False if it could not be done."""
         if not self.chat_id or not message_id:
             return False
+        params = {"chat_id": self.chat_id, "message_id": message_id,
+                  "text": text[:MESSAGE_CHARS], "parse_mode": "HTML"}
+        if reply_markup is not None:
+            params["reply_markup"] = (json.dumps(reply_markup)
+                                      if isinstance(reply_markup, (dict, list))
+                                      else reply_markup)
         for attempt in range(3):
             try:
                 self.api(
                     self.settings["token"], "editMessageText",
-                    {"chat_id": self.chat_id, "message_id": message_id,
-                     "text": text[:MESSAGE_CHARS], "parse_mode": "HTML"},
+                    params,
                     timeout=timeout)
                 return True
             except Exception as exc:
@@ -824,7 +844,7 @@ class Remote:
 
         return "\n\n".join(b for b in blocks if b)
 
-    def _paint(self, icon=None, head=None, bad=None, tail=None, note=None):
+    def _paint(self, icon=None, head=None, bad=None, tail=None, note=None, cancel_button=None):
         """Show the card, creating it the first time and editing it after.
 
         Only when what it would say has changed. The queue reports its phase
@@ -840,23 +860,30 @@ class Remote:
             self._tail = tail
         if note is not None:
             self._note = note
+        if cancel_button is not None:
+            self._cancel_button = bool(cancel_button)
 
         with self._drawing:
             text = self._render()
-            if text == self._painted:
+            markup = json.dumps(CANCEL_KEYBOARD) if self._cancel_button else None
+            state_key = (text, markup)
+            if state_key == self._painted_state:
                 return
             self._painted = text
+            self._painted_state = state_key
             if self._card is None:
-                self._card = self.say(text, html=True)
-            elif not self.edit(self._card, text):
+                self._card = self.say(text, html=True, reply_markup=markup)
+            elif not self.edit(self._card, text, reply_markup=markup):
                 # The message may have been deleted from the phone. Start
                 # another rather than going quiet for the rest of the chain.
-                self._card = self.say(text, html=True)
+                self._card = self.say(text, html=True, reply_markup=markup)
 
     def _new_card(self):
         self._card = None
         self._unreadable = False
         self._painted = None
+        self._painted_state = None
+        self._cancel_button = False
         self._icon = ICON_WORKING
         self._head = ""
         self._prompts = []
@@ -970,7 +997,47 @@ class Remote:
         except Exception as exc:
             self.log(f"[remote] could not confirm the last message: {exc}")
 
+    def _handle_callback_query(self, query):
+        chat_id = (query.get("message") or {}).get("chat", {}).get("id") or (query.get("from") or {}).get("id")
+        if not chat_id or not self.chat_id or int(chat_id) != int(self.chat_id):
+            self.log(f"[remote] ignored callback query from unknown sender: {chat_id}")
+            return
+
+        query_id = query.get("id")
+        if query_id:
+            try:
+                self.api(self.settings["token"], "answerCallbackQuery",
+                         {"callback_query_id": query_id, "text": "Task cancelled"})
+            except Exception as exc:
+                self.log(f"[remote] could not answer callback query: {exc}")
+
+        data = query.get("data")
+        if data == "cancel_task":
+            self._cancel_task(from_command=False)
+
+    def _cancel_task(self, from_command=False):
+        """Halt autopilot, clear queue, send Ctrl+D to target window, and update card."""
+        hwnd = (self.pilot.hwnd if self.pilot.running else None) or self._target()
+        if self.pilot.running:
+            self.pilot.stop("cancelled from phone")
+        self.pending.clear()
+        self.pending_own_card = False
+        try:
+            self.canceller(hwnd)
+        except Exception as exc:
+            self.log(f"[remote] canceller failed: {exc}")
+        self._paint(icon=ICON_STOPPED,
+                    head=f"{self._where or 'Task'} - cancelled",
+                    note="Cancelled from your phone.",
+                    cancel_button=False)
+        if from_command:
+            self.say("Task cancelled.")
+
     def _handle(self, update):
+        if "callback_query" in update:
+            self._handle_callback_query(update["callback_query"])
+            return
+
         message = update.get("message") or update.get("edited_message") or {}
         chat = (message.get("chat") or {}).get("id")
         if not chat:
@@ -1114,6 +1181,8 @@ class Remote:
         command = parts[0].lower()
         if command in ("/status", "/state"):
             self.say(self._describe())
+        elif command == "/usage":
+            self._usage()
         elif command == "/more":
             self._more()
         elif command == "/shot":
@@ -1122,6 +1191,8 @@ class Remote:
             self._target_command(parts[1] if len(parts) > 1 else None)
         elif command == "/at":
             self._at(text.split(None, 1)[1] if len(parts) > 1 else "")
+        elif command == "/cancel":
+            self._cancel_task(from_command=True)
         elif command == "/stop":
             self.pending.clear()
             if self.pilot.running:
@@ -1156,6 +1227,10 @@ class Remote:
                      "without translating.")
         else:
             self.say(f"I only know {_known()}.")
+
+    def _usage(self):
+        from . import usage
+        self.say(usage.format_usage_card(), html=True)
 
     def _more(self):
         """The whole of the last result, in as many messages as that takes.
@@ -1550,12 +1625,12 @@ class Remote:
             self.pending.clear()
             self.pending_own_card = False
             self._paint(icon=ICON_STOPPED, head="could not start",
-                        note=self._describe())
+                        note=self._describe(), cancel_button=False)
             return
         self.pending.clear()
         self._said_waiting = False
         self._where = window_title(hwnd)
-        self._paint(icon=ICON_SENDING, head=f"{self._where} - sending")
+        self._paint(icon=ICON_SENDING, head=f"{self._where} - sending", cancel_button=True)
 
     def _step_of(self, index, total):
         return "" if total == 1 else f"step {index + 1} of {total} - "
@@ -1607,19 +1682,24 @@ class Remote:
         lasts, and every edit counts against a rate limit at Telegram's end.
         """
         where = self._step_of(index, total) + (self._where or "")
+        show_cancel = phase in (COUNTING, SENDING, STARTING, HOLDING, WAITING)
         if phase == WAITING:
             self._said_waiting = True
             self._paint(icon=ICON_NEEDS_YOU,
                         head=f"{where} needs you",
                         note="It has stopped to ask you something. Nothing "
-                             "more goes out until you answer it.")
+                             "more goes out until you answer it.",
+                        cancel_button=show_cancel)
         elif phase == COUNTING:
             self._paint(icon=ICON_SENDING, head=f"{where} - sending in "
-                                                f"{seconds_left}s")
+                                                f"{seconds_left}s",
+                        cancel_button=show_cancel)
         elif phase in (SENDING, STARTING):
-            self._paint(icon=ICON_SENDING, head=f"{where} - sending")
+            self._paint(icon=ICON_SENDING, head=f"{where} - sending",
+                        cancel_button=show_cancel)
         elif phase == HOLDING:
-            self._paint(icon=ICON_WORKING, head=f"{where} - working")
+            self._paint(icon=ICON_WORKING, head=f"{where} - working",
+                        cancel_button=show_cancel)
         elif phase == DONE:
             self.pending_own_card = False
             # The icon carries the verdict, so a notification answers the
@@ -1627,8 +1707,10 @@ class Remote:
             self._paint(icon=ICON_TROUBLE if self._bad else ICON_DONE,
                         head=f"{self._where or 'Done'} - "
                              + ("done, with something to look at"
-                                if self._bad else "done"))
+                                if self._bad else "done"),
+                        cancel_button=False)
         elif phase == STOPPED:
             self.pending_own_card = False
             self._paint(icon=ICON_STOPPED, head=f"{where} - stopped",
-                        note=self.pilot.reason or "")
+                        note=self.pilot.reason or "",
+                        cancel_button=False)
