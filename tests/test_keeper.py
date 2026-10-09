@@ -273,4 +273,60 @@ check("and none was mistaken for a prompt",
       not any("not queued" in s for s in api.sent),
       str([s[:40] for s in api.sent if "not queued" in s]))
 
+print("\n--- Telegram 409 Conflict during poll yields when Relay is alive ---")
+class ConflictApi(Api):
+    def __call__(self, token, method, params, timeout=None):
+        if method == "getUpdates":
+            raise RuntimeError("HTTP Error 409: Conflict")
+        return super().__call__(token, method, params, timeout)
+
+api = ConflictApi()
+state = {"up": True}
+logs = []
+watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=api,
+                 alive=lambda: state["up"], start=lambda: True,
+                 log=logs.append, watch_seconds=0, poll_seconds=0)
+watcher.was_alive = False
+updates = watcher.poll()
+check("poll returns empty list on 409", updates == [], str(updates))
+check("recognized Relay is up", watcher.was_alive is True)
+check("did not log unreachable error", not any("not reachable" in l for l in logs), str(logs))
+
+print("\n--- Telegram 409 Conflict during confirm is handled cleanly ---")
+class ConfirmConflictApi(Api):
+    def __call__(self, token, method, params, timeout=None):
+        if method == "getUpdates" and params.get("timeout") == 0:
+            raise RuntimeError("HTTP Error 409: Conflict")
+        return super().__call__(token, method, params, timeout)
+
+api = ConfirmConflictApi()
+logs = []
+watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=api,
+                 alive=lambda: True, start=lambda: True,
+                 log=logs.append, watch_seconds=0, poll_seconds=0)
+watcher.confirm()
+check("confirm swallowed 409 without logging error", logs == [], str(logs))
+
+print("\n--- startup grace period avoids 409 race and false alarm ---")
+api = Api()
+# Simulates Relay starting 100ms after Keeper
+startup_state = {"attempts": 0}
+def booting_alive():
+    startup_state["attempts"] += 1
+    return startup_state["attempts"] >= 3
+
+watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=api,
+                 alive=booting_alive, start=lambda: True,
+                 log=lambda *_: None, watch_seconds=0.01, poll_seconds=0,
+                 startup_grace=5)
+# Run just the startup check and stop
+def stop_after_startup():
+    watcher.running = False
+    return 0
+
+watcher.tick = stop_after_startup
+watcher.run()
+check("no false death notice sent on startup", api.sent == [], str(api.sent))
+check("Relay recognized as up", watcher.was_alive is True)
+
 sys.exit(report.finish())

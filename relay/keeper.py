@@ -192,7 +192,7 @@ def launcher():
 class Keeper:
     def __init__(self, conf, api=call, alive=relay_is_running, start=None,
                  log=print, watch_seconds=WATCH_SECONDS,
-                 poll_seconds=POLL_SECONDS):
+                 poll_seconds=POLL_SECONDS, startup_grace=None):
         self.conf = conf
         self.api = api
         self.alive = alive
@@ -200,9 +200,14 @@ class Keeper:
         self.log = log
         self.watch_seconds = watch_seconds
         self.poll_seconds = poll_seconds
+        self._startup_grace = startup_grace
         self.was_alive = None
         self.offset = 0
         self.running = True
+
+    @property
+    def startup_grace(self):
+        return self._startup_grace if self._startup_grace is not None else STARTUP_GRACE
 
     # --- talking to the phone --------------------------------------------
 
@@ -246,18 +251,18 @@ class Keeper:
         the difference is exactly the case worth knowing about.
         """
         self.log(f"[keeper] starting Relay ({why})")
+        # Hand over cleanly: acknowledge the offset before starting Relay so
+        # the command that started Relay is consumed before Relay's Remote
+        # thread connects to Telegram.
+        self.confirm()
         if not self.start_relay():
             self.say("Could not start Relay at all. Something is wrong with "
                      "the installation.")
             return False
-        deadline = time.monotonic() + STARTUP_GRACE
+        deadline = time.monotonic() + self.startup_grace
         while time.monotonic() < deadline:
             if self.alive():
                 self.was_alive = True
-                # Hand over cleanly. A message is only consumed when the next
-                # request is made with a higher offset, and this stops asking
-                # the moment Relay is up - so without this the instruction that
-                # started Relay is still pending, and Relay is handed it again.
                 self.confirm()
                 # Nothing left to press: Relay answers from here.
                 self.say(f"Relay is back up. ({why})", keys="remove")
@@ -306,6 +311,9 @@ class Keeper:
             self.api(self.conf["token"], "getUpdates",
                      {"offset": self.offset, "timeout": 0}, timeout=10)
         except Exception as exc:
+            if "409" in str(exc):
+                # Relay is already polling Telegram and has claimed the bot.
+                return
             self.log(f"[keeper] could not confirm: {exc}")
 
     def poll(self):
@@ -314,6 +322,20 @@ class Keeper:
                                {"offset": self.offset,
                                 "timeout": self.poll_seconds}) or []
         except Exception as exc:
+            exc_str = str(exc)
+            if "409" in exc_str:
+                # 409 Conflict: another instance called getUpdates.
+                # If Relay is alive, it claimed the bot - hand over cleanly.
+                if self.alive():
+                    self.was_alive = True
+                    return []
+                # If Relay is not visible yet, wait briefly to see if it claims the mutex.
+                time.sleep(self.watch_seconds)
+                if self.alive():
+                    self.was_alive = True
+                    return []
+                self.log("[keeper] telegram conflict: another instance is polling")
+                return []
             self.log(f"[keeper] not reachable ({exc})")
             time.sleep(self.watch_seconds)
             return []
@@ -349,6 +371,16 @@ class Keeper:
     def run(self):
         self.log("[keeper] watching")
         self.was_alive = self.alive()
+        if not self.was_alive and self.startup_grace > 0 and self.watch_seconds > 0:
+            # When started alongside Relay (such as at Windows logon), Relay
+            # may still be loading Python, PySide and its models. Wait a few
+            # moments before declaring it dead and fighting it for Telegram updates.
+            deadline = time.monotonic() + self.startup_grace
+            while time.monotonic() < deadline and self.running:
+                time.sleep(min(0.5, self.watch_seconds))
+                if self.alive():
+                    self.was_alive = True
+                    break
         if not self.was_alive:
             self.say("The keeper is up, but Relay is not running.\n\n"
                      "Send /start to bring it back.")
