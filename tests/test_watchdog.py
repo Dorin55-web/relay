@@ -46,12 +46,14 @@ def hold_the_gil_in_here():
     from relay.compose import Compose
     from relay.translator import TextTranslator
 
-    win = Compose(TextTranslator(), on_paste=lambda t: None,
-                  target_getter=lambda: "Notepad")
-    win.show()
-    app.processEvents()
-    win.close()
-    app.processEvents()
+    win = None
+    for _ in range(3):
+        win = Compose(TextTranslator(), on_paste=lambda t: None,
+                      target_getter=lambda: "Notepad")
+        win.show()
+        app.processEvents()
+        win.close()
+        app.processEvents()
     return win
 
 
@@ -94,6 +96,44 @@ print(f"    {summary}")
 check("summary reports what it saw", "stall" in summary)
 
 dog.stop()
+
+print("\n--- pause and resume suppresses reports while hooks are down ---")
+paused_reports = []
+paused_dog = Watchdog(on_report=paused_reports.append).start()
+time.sleep(0.1)
+paused_dog.pause()
+hold_the_gil_in_here()
+time.sleep(0.3)
+paused_dog.resume()
+time.sleep(0.1)
+check("nothing reported while paused", not paused_reports, str(len(paused_reports)))
+check("stalls not counted while paused", paused_dog.stalls == 0)
+
+with paused_dog.paused():
+    hold_the_gil_in_here()
+    time.sleep(0.3)
+time.sleep(0.1)
+check("nothing reported inside paused context", not paused_reports, str(len(paused_reports)))
+check("stalls remain zero", paused_dog.stalls == 0)
+paused_dog.stop()
+
+print("\n--- system sleep/standby detection ---")
+sleep_reports = []
+current_time = [100.0]
+
+def mock_clock():
+    return current_time[0]
+
+sleep_dog = Watchdog(on_report=sleep_reports.append, clock=mock_clock).start()
+time.sleep(0.1)
+# Advance clock by 120s (simulating waking from 2 minutes of system sleep/standby)
+current_time[0] += 120.0
+time.sleep(0.1)
+sleep_dog.stop()
+resumed_msgs = [r for r in sleep_reports if "system resumed after" in r]
+check("detected system sleep/standby", len(resumed_msgs) >= 1, str(sleep_reports))
+check("did not count sleep as a code stall", sleep_dog.stalls == 0)
+check("did not report low-level hook frozen", not any("no GIL for" in r for r in sleep_reports))
 
 print("\n--- it says so even when nothing is wrong ---")
 # An idle session writes nothing at all, so a log that simply stops leaves the

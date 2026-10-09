@@ -461,6 +461,8 @@ class VoicePrompt:
             listener.stop()
         if self.tracker is not None:
             self.tracker.pause()
+        if getattr(self, "watchdog", None) is not None:
+            self.watchdog.pause()
         started = time.perf_counter()
         try:
             yield
@@ -468,6 +470,8 @@ class VoicePrompt:
             elapsed = (time.perf_counter() - started) * 1000
             if elapsed > 100:
                 print(f"[hooks] down {elapsed:.0f}ms while {what} was built")
+            if getattr(self, "watchdog", None) is not None:
+                self.watchdog.resume()
             if self.tracker is not None:
                 self.tracker.resume()
             self._listener = keyboard.Listener(

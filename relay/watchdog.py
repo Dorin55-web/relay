@@ -20,6 +20,10 @@ TICK_MS = 50
 # Below this a gap is scheduling noise. Above it, a low-level hook would have
 # missed LowLevelHooksTimeout and Windows would have been sitting on input.
 REPORT_MS = 250
+# Above this a gap is a machine suspension, sleep or hibernation, not a Python
+# GIL stall. Low-level hooks are not starved and the mouse is not frozen while
+# the operating system itself is asleep.
+SUSPEND_THRESHOLD_MS = 10000
 # Never write two reports for the same stall, or one freeze fills the log.
 QUIET_SECONDS = 2.0
 
@@ -35,14 +39,47 @@ HEARTBEAT_SECONDS = 300
 
 
 class Watchdog:
-    def __init__(self, on_report=print, heartbeat_seconds=HEARTBEAT_SECONDS):
+    def __init__(self, on_report=print, heartbeat_seconds=HEARTBEAT_SECONDS,
+                 suspend_threshold_ms=SUSPEND_THRESHOLD_MS,
+                 clock=time.perf_counter):
         self.on_report = on_report
         self.heartbeat_seconds = heartbeat_seconds
+        self.suspend_threshold_ms = suspend_threshold_ms
+        self.clock = clock
         self.worst_ms = 0.0
         self.stalls = 0
         self._stop = threading.Event()
         self._thread = None
         self._last_report = 0.0
+        self._paused = 0
+        self._lock = threading.Lock()
+        self._just_resumed = False
+
+    def pause(self):
+        """Temporarily pause stall monitoring while hooks are safely down."""
+        with self._lock:
+            self._paused += 1
+
+    def resume(self):
+        """Resume stall monitoring once hooks are back up."""
+        with self._lock:
+            if self._paused > 0:
+                self._paused -= 1
+            if self._paused == 0:
+                self._just_resumed = True
+
+    def paused(self):
+        """Context manager for pausing stall monitoring."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def _ctx():
+            self.pause()
+            try:
+                yield
+            finally:
+                self.resume()
+        return _ctx()
 
     def start(self):
         if self._thread is not None:
@@ -57,14 +94,33 @@ class Watchdog:
         self._stop.set()
 
     def _run(self):
-        last = time.perf_counter()
+        last = self.clock()
         beat_at = last
         worst_since_beat = 0.0
         while not self._stop.is_set():
             time.sleep(TICK_MS / 1000.0)
-            now = time.perf_counter()
+            now = self.clock()
             gap = (now - last) * 1000.0
             last = now
+
+            with self._lock:
+                if self._paused > 0:
+                    worst_since_beat = 0.0
+                    continue
+                if self._just_resumed:
+                    self._just_resumed = False
+                    worst_since_beat = 0.0
+                    continue
+
+            if gap >= self.suspend_threshold_ms:
+                duration = f"{gap / 1000:.1f}s" if gap < 60000 else f"{gap / 60000:.1f}m"
+                try:
+                    self.on_report(
+                        f"[watchdog] system resumed after {duration} sleep/standby"
+                    )
+                except Exception:
+                    pass
+                continue
             worst_since_beat = max(worst_since_beat, gap)
 
             if now - beat_at >= self.heartbeat_seconds:
