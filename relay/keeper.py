@@ -204,6 +204,8 @@ class Keeper:
         self.was_alive = None
         self.offset = 0
         self.running = True
+        self.retry_wait = max(2, self.watch_seconds)
+        self._offline = False
 
     @property
     def startup_grace(self):
@@ -224,13 +226,19 @@ class Keeper:
             params["reply_markup"] = json.dumps(KEYBOARD)
         elif keys == "remove":
             params["reply_markup"] = json.dumps(NO_KEYBOARD)
-        try:
-            self.api(self.conf["token"], "sendMessage", params, timeout=20)
-            self.log(f"[keeper] told you: {text.splitlines()[0]}")
-            return True
-        except Exception as exc:
-            self.log(f"[keeper] could not send: {exc}")
-            return False
+        for attempt in range(3):
+            try:
+                self.api(self.conf["token"], "sendMessage", params, timeout=20)
+                self.log(f"[keeper] told you: {text.splitlines()[0]}")
+                return True
+            except Exception as exc:
+                if attempt < 2 and any(err in str(exc).lower() for err in ("11001", "10054", "10060", "timed out", "handshake")):
+                    if self.watch_seconds > 0:
+                        time.sleep(1.0 * (attempt + 1))
+                    continue
+                self.log(f"[keeper] could not send: {exc}")
+                return False
+        return False
 
     # --- starting it ------------------------------------------------------
 
@@ -330,15 +338,28 @@ class Keeper:
                     self.was_alive = True
                     return []
                 # If Relay is not visible yet, wait briefly to see if it claims the mutex.
-                time.sleep(self.watch_seconds)
+                if self.watch_seconds > 0:
+                    time.sleep(self.watch_seconds)
                 if self.alive():
                     self.was_alive = True
                     return []
                 self.log("[keeper] telegram conflict: another instance is polling")
                 return []
-            self.log(f"[keeper] not reachable ({exc})")
-            time.sleep(self.watch_seconds)
+
+            if not self._offline:
+                self.log(f"[keeper] not reachable ({exc})")
+                self._offline = True
+
+            sleep_time = self.retry_wait if self.watch_seconds > 0 else 0
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            self.retry_wait = min(self.retry_wait * 2, 60)
             return []
+
+        if self._offline:
+            self.log("[keeper] connection restored")
+            self._offline = False
+        self.retry_wait = max(2, self.watch_seconds)
         for update in updates:
             self.offset = max(self.offset, int(update.get("update_id", 0)) + 1)
         return updates

@@ -77,6 +77,9 @@ class Api:
             self.edits.append(params["text"])
             self.messages[params["message_id"]] = params["text"]
             return {}
+        if method == "sendPhoto":
+            self.sent.append(params.get("caption", ""))
+            return {"message_id": len(self.sent)}
         raise AssertionError(f"unexpected method {method}")
 
 
@@ -106,6 +109,7 @@ def make(chat_id=MINE, states=None, sent=None, watched=True):
     bot.pilot.poll_seconds = 0.02
     bot.pilot.countdown_seconds = 1
     bot.pilot.countdown_tick = 0.02
+    bot._retry_delay = 0
     return bot, api, box, path
 
 
@@ -653,5 +657,60 @@ check("and its own icon",
 # edit counts against a rate limit at Telegram's end.
 check("and saying it twice costs nothing",
       len(api.sent) + len(api.edits) == 1, f"{api.sent} {api.edits}")
+
+print("\n--- network and DNS error resiliency ---")
+class FlakyRemoteApi(Api):
+    def __init__(self):
+        super().__init__()
+        self.say_attempts = 0
+        self.edit_attempts = 0
+        self.photo_attempts = 0
+
+    def __call__(self, token, method, params, timeout=None):
+        if method == "sendMessage":
+            self.say_attempts += 1
+            if self.say_attempts < 2:
+                raise OSError("[Errno 11001] getaddrinfo failed")
+        elif method == "editMessageText":
+            self.edit_attempts += 1
+            if self.edit_attempts < 2:
+                raise OSError("WinError 10054 An existing connection was forcibly closed by the remote host")
+        elif method == "sendPhoto":
+            self.photo_attempts += 1
+            if self.photo_attempts < 2:
+                raise OSError("[Errno 11001] getaddrinfo failed")
+        return super().__call__(token, method, params, timeout)
+
+bot, api, sent, _ = make()
+bot.api = FlakyRemoteApi()
+msg_id = bot.say("test DNS recovery")
+check("say retries on 11001 and succeeds", msg_id == 1 and bot.api.say_attempts == 2)
+
+edited = bot.edit(msg_id, "edited text")
+check("edit retries on 10054 and succeeds", edited is True and bot.api.edit_attempts == 2)
+
+photo_id = bot.send_photo(b"fake_png_data", "caption")
+check("send_photo retries on 11001 and succeeds", photo_id == 2 and bot.api.photo_attempts == 2)
+
+class DeferredCommandsApi(Api):
+    def __init__(self):
+        super().__init__()
+        self.offline = True
+    def __call__(self, token, method, params, timeout=None):
+        if method == "setMyCommands":
+            if self.offline:
+                raise OSError("[Errno 11001] getaddrinfo failed")
+        return super().__call__(token, method, params, timeout)
+
+bot, api, sent, _ = make()
+bot.api = DeferredCommandsApi()
+bot.publish_commands()
+check("initial publish_commands fails quietly when offline", bot._commands_published is False and bot.api.published is None)
+bot.api.offline = False
+bot._offline = True
+bot._offline = False
+if not bot._commands_published:
+    bot.publish_commands()
+check("commands published once connection restored", bot._commands_published is True and bot.api.published is not None)
 
 sys.exit(report.finish())

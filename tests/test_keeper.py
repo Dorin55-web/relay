@@ -329,4 +329,46 @@ watcher.run()
 check("no false death notice sent on startup", api.sent == [], str(api.sent))
 check("Relay recognized as up", watcher.was_alive is True)
 
+print("\n--- Keeper network and DNS error resiliency ---")
+class FlakyNetworkApi(Api):
+    def __init__(self):
+        super().__init__()
+        self.say_attempts = 0
+    def __call__(self, token, method, params, timeout=None):
+        if method == "sendMessage":
+            self.say_attempts += 1
+            if self.say_attempts < 2:
+                raise OSError("[Errno 11001] getaddrinfo failed")
+        return super().__call__(token, method, params, timeout)
+
+flaky_api = FlakyNetworkApi()
+logs = []
+watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=flaky_api,
+                 alive=lambda: False, start=lambda: True,
+                 log=logs.append, watch_seconds=0, poll_seconds=0)
+success = watcher.say("test network resilience")
+check("say retries on Errno 11001 and succeeds", success is True and flaky_api.say_attempts == 2)
+check("message was sent to telegram", len(flaky_api.sent) == 1)
+
+class OfflineApi(Api):
+    def __call__(self, token, method, params, timeout=None):
+        if method == "getUpdates":
+            raise OSError("[Errno 11001] getaddrinfo failed")
+        return super().__call__(token, method, params, timeout)
+
+offline_logs = []
+offline_watcher = Keeper(conf={"token": "t", "chat_id": MINE}, api=OfflineApi(),
+                         alive=lambda: False, start=lambda: True,
+                         log=offline_logs.append, watch_seconds=0, poll_seconds=0)
+offline_watcher.poll()
+offline_watcher.poll()
+check("offline logs only once instead of every poll", len([l for l in offline_logs if "not reachable" in l]) == 1)
+check("exponential backoff increases retry_wait", offline_watcher.retry_wait > 2)
+
+normal_api = Api()
+offline_watcher.api = normal_api
+offline_watcher.poll()
+check("connection restored is logged on recovery", any("connection restored" in l for l in offline_logs))
+check("retry_wait is reset on recovery", offline_watcher.retry_wait == 2)
+
 sys.exit(report.finish())

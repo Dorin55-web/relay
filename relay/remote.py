@@ -630,6 +630,9 @@ class Remote:
         # exists. See _handle.
         self._started = time.time()
         self._said_waiting = False
+        self._commands_published = False
+        self._offline = False
+        self._retry_delay = 1.0
 
     # --- outside world ---------------------------------------------------
 
@@ -684,13 +687,19 @@ class Remote:
             params["reply_markup"] = json.dumps(KEYBOARD)
         elif keys == "remove":
             params["reply_markup"] = json.dumps(NO_KEYBOARD)
-        try:
-            result = self.api(
-                self.settings["token"], "sendMessage", params, timeout=20)
-            return (result or {}).get("message_id")
-        except Exception as exc:
-            self.log(f"[remote] could not reply: {exc}")
-            return None
+        for attempt in range(3):
+            try:
+                result = self.api(
+                    self.settings["token"], "sendMessage", params, timeout=20)
+                return (result or {}).get("message_id")
+            except Exception as exc:
+                if attempt < 2 and any(err in str(exc).lower() for err in ("11001", "10054", "10060", "timed out", "handshake")):
+                    if self._retry_delay > 0 and self._stop.wait(self._retry_delay * (attempt + 1)):
+                        return None
+                    continue
+                self.log(f"[remote] could not reply: {exc}")
+                return None
+        return None
 
     def send_photo(self, blob, caption=""):
         """Send a picture with a line under it. Returns its id, or None.
@@ -708,29 +717,41 @@ class Remote:
                   "photo": ("window.png", blob),
                   "caption": _fit(caption, CAPTION_CHARS),
                   "parse_mode": "HTML"}
-        try:
-            result = self.api(self.settings["token"], "sendPhoto", params,
-                              timeout=PHOTO_TIMEOUT)
-            return (result or {}).get("message_id")
-        except Exception as exc:
-            self.log(f"[remote] could not send the picture: {exc}")
-            self.say(f"The picture was taken but would not send ({exc}).")
-            return None
+        for attempt in range(3):
+            try:
+                result = self.api(self.settings["token"], "sendPhoto", params,
+                                  timeout=PHOTO_TIMEOUT)
+                return (result or {}).get("message_id")
+            except Exception as exc:
+                if attempt < 2 and any(err in str(exc).lower() for err in ("11001", "10054", "10060", "timed out", "handshake")):
+                    if self._retry_delay > 0 and self._stop.wait(self._retry_delay * (attempt + 1)):
+                        return None
+                    continue
+                self.log(f"[remote] could not send the picture: {exc}")
+                self.say(f"The picture was taken but would not send ({exc}).")
+                return None
+        return None
 
     def edit(self, message_id, text, timeout=20):
         """Rewrite a message already sent. False if it could not be done."""
         if not self.chat_id or not message_id:
             return False
-        try:
-            self.api(
-                self.settings["token"], "editMessageText",
-                {"chat_id": self.chat_id, "message_id": message_id,
-                 "text": text[:MESSAGE_CHARS], "parse_mode": "HTML"},
-                timeout=timeout)
-            return True
-        except Exception as exc:
-            self.log(f"[remote] could not edit: {exc}")
-            return False
+        for attempt in range(3):
+            try:
+                self.api(
+                    self.settings["token"], "editMessageText",
+                    {"chat_id": self.chat_id, "message_id": message_id,
+                     "text": text[:MESSAGE_CHARS], "parse_mode": "HTML"},
+                    timeout=timeout)
+                return True
+            except Exception as exc:
+                if attempt < 2 and any(err in str(exc).lower() for err in ("11001", "10054", "10060", "timed out", "handshake")):
+                    if self._retry_delay > 0 and self._stop.wait(self._retry_delay * (attempt + 1)):
+                        return False
+                    continue
+                self.log(f"[remote] could not edit: {exc}")
+                return False
+        return False
 
     # --- one message per batch, rewritten as it goes ----------------------
 
@@ -831,6 +852,7 @@ class Remote:
         try:
             self.api(self.settings["token"], "setMyCommands",
                      {"commands": json.dumps(listing)}, timeout=20)
+            self._commands_published = True
             self.log(f"[remote] published {len(listing)} commands")
         except Exception as exc:
             self.log(f"[remote] could not publish the command list: {exc}")
@@ -846,12 +868,21 @@ class Remote:
             except Exception as exc:
                 # Offline, asleep, or Telegram having a moment. None of those
                 # deserve a line a second.
-                self.log(f"[remote] not reachable ({exc}); retrying in {wait}s")
+                if not self._offline:
+                    self.log(f"[remote] not reachable ({exc}); retrying in {wait}s")
+                    self._offline = True
                 if self._stop.wait(wait):
                     return
                 wait = min(wait * 2, RETRY_MAX)
                 continue
+
+            if self._offline:
+                self.log("[remote] connection restored")
+                self._offline = False
             wait = RETRY_START
+
+            if not self._commands_published:
+                self.publish_commands()
 
             for update in updates:
                 try:
