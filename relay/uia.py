@@ -203,11 +203,42 @@ def focus_named_input(hwnd, name):
     if auto is None or not name:
         return False
     try:
+        from .target import window_rect
+        wrect = window_rect(hwnd)
+
         root = auto.ElementFromHandle(hwnd)
         condition = auto.CreatePropertyCondition(_id(UIA, "UIA_NamePropertyId"), name)
-        element = root.FindFirst(_id(UIA, "TreeScope_Descendants"), condition)
+        matches = root.FindAll(_id(UIA, "TreeScope_Descendants"), condition)
 
-        # Fallback: search Edit controls for case-insensitive or substring match
+        candidates = []
+        for i in range(matches.Length if matches else 0):
+            try:
+                el = matches.GetElement(i)
+                r = el.CurrentBoundingRectangle
+                if r.right <= r.left or r.bottom <= r.top:
+                    continue
+                # Reject off-screen coordinates or elements outside target window
+                if wrect:
+                    wl, wt, wr, wb = wrect
+                    if r.right < wl or r.left > wr or r.bottom < wt or r.top > wb:
+                        continue
+                elif r.top < 0 or r.left < 0:
+                    continue
+                focusable = bool(el.CurrentIsKeyboardFocusable)
+                # Prioritize: focusable on-screen elements
+                priority = 0 if focusable else 1
+                candidates.append((priority, el, r))
+            except Exception:
+                continue
+
+        element = None
+        best_rect = None
+        if candidates:
+            candidates.sort(key=lambda c: c[0])
+            element = candidates[0][1]
+            best_rect = candidates[0][2]
+
+        # Fallback: search Edit controls for case-insensitive or substring match within window
         if not element:
             name_lower = name.lower()
             try:
@@ -219,9 +250,19 @@ def focus_named_input(hwnd, name):
                 for i in range(edits.Length if edits else 0):
                     try:
                         el = edits.GetElement(i)
+                        r = el.CurrentBoundingRectangle
+                        if r.right <= r.left or r.bottom <= r.top:
+                            continue
+                        if wrect:
+                            wl, wt, wr, wb = wrect
+                            if r.right < wl or r.left > wr or r.bottom < wt or r.top > wb:
+                                continue
+                        elif r.top < 0 or r.left < 0:
+                            continue
                         el_name = (el.CurrentName or "").lower()
-                        if name_lower in el_name or el_name in name_lower:
+                        if name_lower in el_name or el_name in name_lower or not name_lower:
                             element = el
+                            best_rect = r
                             break
                     except Exception:
                         continue
@@ -251,30 +292,25 @@ def focus_named_input(hwnd, name):
         # place the caret in web DOM input elements without a mouse click.
         # Click on the center of the element's bounding rectangle.
         try:
-            rect = element.CurrentBoundingRectangle
+            rect = best_rect or element.CurrentBoundingRectangle
             if rect.right > rect.left and rect.bottom > rect.top:
                 cx = (rect.left + rect.right) // 2
                 cy = (rect.top + rect.bottom) // 2
                 import ctypes
-                import ctypes.wintypes as wt
                 user32 = ctypes.windll.user32
 
-                pt = wt.POINT()
-                user32.GetCursorPos(ctypes.byref(pt))
-
+                # Click input box at (cx, cy)
                 user32.SetCursorPos(cx, cy)
                 user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
                 user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-                time.sleep(0.04)
-                user32.SetCursorPos(pt.x, pt.y)
+                time.sleep(0.06)
 
-                time.sleep(0.03)
                 focused = auto.GetFocusedElement()
                 if focused and (focused.CurrentName == name or _looks_like_input(focused, None)):
                     return True
 
-                # Clicking the bounding box of the target input element is the
-                # most direct, reliable way to place the caret in Chromium / Electron.
+                # Clicking the bounding box of the target input element inside the window
+                # is the definitive way to place the caret in Chromium / Electron.
                 return True
         except Exception as exc:
             print(f"[uia] mouse click on {name!r} failed: {exc}")

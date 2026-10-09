@@ -230,7 +230,7 @@ def paste_text(text, config, manage_clipboard=True, target_hwnd=None, submit=Non
             _keyboard.release("v")
 
         if config.auto_enter if submit is None else submit:
-            time.sleep(0.05)
+            time.sleep(0.12)
             _keyboard.press(Key.enter)
             _keyboard.release(Key.enter)
         return True

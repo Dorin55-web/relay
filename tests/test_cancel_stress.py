@@ -413,8 +413,14 @@ def run_tests():
     class FakeElement:
         CurrentName = "Message input"
         CurrentBoundingRectangle = FakeRect()
+        CurrentIsKeyboardFocusable = True
         def SetFocus(self):
             pass
+
+    class FakeList:
+        Length = 1
+        def GetElement(self, idx):
+            return FakeElement()
 
     class FakeFocusedWrong:
         CurrentName = "Select model, current: Gemini 3.8 Flash High"
@@ -424,10 +430,8 @@ def run_tests():
             return self
         def CreatePropertyCondition(self, prop, val):
             return prop
-        def FindFirst(self, scope, cond):
-            return FakeElement()
         def FindAll(self, scope, cond):
-            return None
+            return FakeList()
         def GetFocusedElement(self):
             return FakeFocusedWrong()
 
@@ -438,6 +442,45 @@ def run_tests():
                 res = uia_mod.focus_named_input(HWND, "Message input")
                 test("6.2 focus_named_input succeeds via click fallback", res is True)
                 test("6.2 mouse click was sent to center of bounding box", mock_mouse.called)
+                mock_set_cursor.assert_called_with(200, 520)
+
+    # 6.3: focus_named_input discards off-screen elements with negative coordinates
+    class FakeOffscreenRect:
+        left = 882
+        top = -1527
+        right = 973
+        bottom = -1512
+
+    class FakeOffscreenElement:
+        CurrentName = "Message input"
+        CurrentBoundingRectangle = FakeOffscreenRect()
+        CurrentIsKeyboardFocusable = False
+        def SetFocus(self):
+            pass
+
+    class FakeMultiList:
+        Length = 2
+        def GetElement(self, idx):
+            if idx == 0:
+                return FakeOffscreenElement()
+            return FakeElement()
+
+    class FakeMultiAuto:
+        def ElementFromHandle(self, hwnd):
+            return self
+        def CreatePropertyCondition(self, prop, val):
+            return prop
+        def FindAll(self, scope, cond):
+            return FakeMultiList()
+        def GetFocusedElement(self):
+            return FakeFocusedWrong()
+
+    with patch("relay.uia._uia", return_value=(FakeMultiAuto(), MagicMock())):
+        with patch("ctypes.windll.user32.SetCursorPos") as mock_set_cursor:
+            with patch("ctypes.windll.user32.mouse_event") as mock_mouse:
+                res = uia_mod.focus_named_input(HWND, "Message input")
+                test("6.3 focus_named_input discards off-screen match and clicks on-screen candidate", res is True)
+                mock_set_cursor.assert_called_with(200, 520)
 
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
