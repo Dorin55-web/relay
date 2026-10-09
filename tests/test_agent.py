@@ -62,6 +62,12 @@ check("while it then runs it",
       state(ag, "Requesting permission to run ipconfig",
             ["Cancel (Ctrl+D)"]) == agent.BUSY)
 check("caught mid-repaint", state(ag, buttons=["Copy"]) == agent.UNKNOWN)
+check("running background task / tests",
+      state(ag, buttons=["Send message", "Stop Task"]) == agent.BUSY)
+check("running multiple background tasks",
+      state(ag, buttons=["Send message", "Stop Tasks"]) == agent.BUSY)
+check("background task finished",
+      state(ag, buttons=["Send message"]) == agent.IDLE)
 
 
 print("\n--- opencode: the status line ---")

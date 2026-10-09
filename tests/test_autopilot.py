@@ -429,4 +429,28 @@ check("and the second did not follow it into the gap", window.sent == ["first"],
       str(window.sent))
 pilot.stop("test over")
 
+
+print("\n--- background task / tests hold the queue until finished ---")
+# When AntiGravity runs a command/test in the background, its turn finishes
+# and 'Send message' appears, but 'Stop Task' is also active so it reads as BUSY.
+# The queue must not send the next step while the background task is running.
+ag_profile = next(p for p in agent.BUILT_IN if p["name"] == "Antigravity")
+ag_window = Fake(state=agent.IDLE)
+bg_buttons = ["Send message", "Stop Task"]
+ag_window.read = lambda _h: agent.state(0, ag_profile, {"text": "", "buttons": bg_buttons})
+
+pilot = ag_window.pilot()
+pilot.start(["first", "second"], HWND)
+time.sleep(pilot.poll_seconds * 5)
+check("nothing sent while Stop Task is active", ag_window.sent == [], str(ag_window.sent))
+check("pilot is holding", pilot.phase in (auto_mod.HOLDING, auto_mod.STARTING), pilot.phase)
+
+# Now the background task finishes ('Stop Task' is removed from the window)
+bg_buttons.remove("Stop Task")
+deadline = time.monotonic() + 3
+while not ag_window.sent and time.monotonic() < deadline:
+    time.sleep(0.01)
+check("sent once background task finished", ag_window.sent == ["first"], str(ag_window.sent))
+pilot.stop("test over")
+
 sys.exit(report.finish())

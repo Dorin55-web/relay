@@ -5,10 +5,11 @@
       "process": "Antigravity.exe",
       "input": "Message input",
       "busy": {
-        "button": "Cancel (Ctrl+D)"
+        "button": "Cancel (Ctrl+D)|Stop Task|Stop Tasks"
       },
       "idle": {
-        "button": "Send message"
+        "button": "Send message",
+        "absent_button": "Cancel (Ctrl+D)|Stop Task|Stop Tasks"
       },
       "waiting": {
         "text": "Requesting permission",

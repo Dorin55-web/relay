@@ -65,8 +65,11 @@ BUILT_IN = [
         # The accessible name of the box you type in, so a step can be put
         # there rather than wherever focus happens to be. See focus_input.
         "input": "Message input",
-        "busy": {"button": "Cancel (Ctrl+D)"},
-        "idle": {"button": "Send message"},
+        "busy": {"button": "Cancel (Ctrl+D)|Stop Task|Stop Tasks"},
+        "idle": {
+            "button": "Send message",
+            "absent_button": "Cancel (Ctrl+D)|Stop Task|Stop Tasks",
+        },
         # The text alone would be wrong: the request stays in the transcript
         # after you have answered it. Pairing it with the input box still being
         # gone is what makes it mean "right now" instead of "at some point".
@@ -217,18 +220,30 @@ def _matches(rule, text, buttons):
         wanted_low = wanted.lower()
         if key in ("line", "absent_line") and tail is None:
             tail = _tail(text)
-        if key == "text" and wanted_low not in lowered:
-            return False
-        if key == "absent_text" and wanted_low in lowered:
-            return False
-        if key == "line" and wanted_low not in tail:
-            return False
-        if key == "absent_line" and wanted_low in tail:
-            return False
-        if key == "button" and not any(wanted_low == b.lower() for b in buttons):
-            return False
-        if key == "absent_button" and any(wanted_low == b.lower() for b in buttons):
-            return False
+        if key == "text":
+            options = [opt.strip().lower() for opt in wanted.split("|")]
+            if not any(opt in lowered for opt in options):
+                return False
+        if key == "absent_text":
+            options = [opt.strip().lower() for opt in wanted.split("|")]
+            if any(opt in lowered for opt in options):
+                return False
+        if key == "line":
+            options = {opt.strip().lower() for opt in wanted.split("|")}
+            if not any(l == wanted_low or l in options for l in tail):
+                return False
+        if key == "absent_line":
+            options = {opt.strip().lower() for opt in wanted.split("|")}
+            if any(l == wanted_low or l in options for l in tail):
+                return False
+        if key == "button":
+            options = {opt.strip().lower() for opt in wanted.split("|")}
+            if not any(b.lower() == wanted_low or b.lower() in options for b in buttons):
+                return False
+        if key == "absent_button":
+            options = {opt.strip().lower() for opt in wanted.split("|")}
+            if any(b.lower() == wanted_low or b.lower() in options for b in buttons):
+                return False
     return True
 
 
