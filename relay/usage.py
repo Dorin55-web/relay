@@ -417,14 +417,52 @@ class LanguageServerClient:
             return None
 
     def parse_quota(self, data: dict) -> Optional[Tuple[float, str]]:
-        """Parse remainingFraction and resetTime from ConnectRPC response."""
+        """Parse remainingFraction and resetTime from ConnectRPC response.
+
+        Prioritizes the active model from defaultOverrideModelConfig, then Gemini models,
+        avoiding random model order changes (e.g. unused Claude/GPT quotas showing 100%).
+        """
         if not data or not isinstance(data, dict):
             return None
-        configs = (
+        cascade = (
             data.get("userStatus", {})
             .get("cascadeModelConfigData", {})
-            .get("clientModelConfigs", [])
         )
+        configs = cascade.get("clientModelConfigs", [])
+        if not configs:
+            return None
+
+        # 1. Prefer active model specified in defaultOverrideModelConfig
+        default_model = (
+            cascade.get("defaultOverrideModelConfig", {})
+            .get("modelOrAlias", {})
+            .get("model")
+        )
+        if default_model:
+            for cfg in configs:
+                if cfg.get("modelOrAlias", {}).get("model") == default_model:
+                    quota = cfg.get("quotaInfo") or {}
+                    rem = quota.get("remainingFraction")
+                    reset_time = quota.get("resetTime")
+                    if rem is not None and reset_time is not None:
+                        try:
+                            return float(rem), str(reset_time)
+                        except (ValueError, TypeError):
+                            pass
+
+        # 2. Prefer active Gemini model (AntiGravity primary AI)
+        for cfg in configs:
+            if "gemini" in (cfg.get("label") or "").lower():
+                quota = cfg.get("quotaInfo") or {}
+                rem = quota.get("remainingFraction")
+                reset_time = quota.get("resetTime")
+                if rem is not None and reset_time is not None:
+                    try:
+                        return float(rem), str(reset_time)
+                    except (ValueError, TypeError):
+                        pass
+
+        # 3. Fallback to any valid quota
         for cfg in configs:
             quota = cfg.get("quotaInfo") or {}
             rem = quota.get("remainingFraction")
