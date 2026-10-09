@@ -164,4 +164,12 @@ injector.focus_window = lambda hwnd: restored.append(hwnd) or True
 injector.paste_text("hello", config, target_hwnd=42)
 check("and left alone when it is already there", restored == [], str(restored))
 
+print("\n--- notification windows are never restored as target ---")
+clip, keys = rig(front=999)
+restored = []
+injector.focus_window = lambda hwnd: restored.append(hwnd) or True
+injector.is_notification_window = lambda hwnd: hwnd == 888
+injector.paste_text("hello", config, target_hwnd=888)
+check("a notification target is not brought forward", restored == [], str(restored))
+
 sys.exit(report.finish())

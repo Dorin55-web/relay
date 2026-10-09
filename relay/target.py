@@ -29,7 +29,12 @@ SHELL_CLASSES = {
     "NotifyIconOverflowWindow",
     "TaskListThumbnailWnd",
     "ForegroundStaging",
+    "ToastWnd",
+    "ActionCenterControlHost",
+    "NotificationArea",
+    "Shell_Dialog",
 }
+
 
 
 def _u32():
@@ -134,6 +139,44 @@ def window_process(hwnd):
         return ""
     finally:
         kernel32.CloseHandle(handle)
+
+
+SHELL_PROCESSES = {
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+}
+
+NOTIFICATION_TITLE_PREFIXES = (
+    "new notification",
+    "notificare nouă",
+    "action center",
+    "notification center",
+)
+
+
+def is_notification_window(hwnd) -> bool:
+    """True if hwnd is a notification popup or system shell flyout.
+
+    Toast notifications (Java, Windows Update, messaging apps) momentarily take
+    foreground or receive clicks to dismiss them. They are never somewhere you
+    type, and letting one become the target silently hijacks dictation until
+    the notification closes.
+    """
+    if not hwnd:
+        return False
+    cls = window_class(hwnd)
+    if cls in SHELL_CLASSES:
+        return True
+    title = window_title(hwnd).lower()
+    if title.startswith(NOTIFICATION_TITLE_PREFIXES) or title in ("notification", "notificare"):
+        return True
+    try:
+        proc = (window_process(hwnd) or "").lower()
+        if proc in SHELL_PROCESSES:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 TERMINAL_PROCESSES = {
@@ -280,6 +323,8 @@ class TargetTracker:
                 return
             if window_class(hwnd) in SHELL_CLASSES:
                 return
+            if is_notification_window(hwnd):
+                return
             # Hidden service windows (GameInputServiceWindow and friends) can
             # momentarily hold the foreground. They are invisible and tiny, and
             # letting one become the target silently hijacks every dictation.
@@ -355,6 +400,9 @@ class TargetTracker:
     def current(self):
         """The remembered window, or None if it has since been closed."""
         if self.hwnd and _u32().IsWindow(self.hwnd):
+            if is_notification_window(self.hwnd):
+                self.hwnd, self.title = None, ""
+                return None
             return self.hwnd
         if self.hwnd:
             print(f"[target] {self.title!r} is gone; using whatever has focus")

@@ -11,7 +11,13 @@ import ctypes.wintypes as wt
 import pyperclip
 from pynput.keyboard import Controller, Key
 
-from .target import focus_window, foreground_window, is_terminal_window, window_title
+from .target import (
+    focus_window,
+    foreground_window,
+    is_notification_window,
+    is_terminal_window,
+    window_title,
+)
 
 _keyboard = Controller()
 
@@ -188,6 +194,8 @@ def paste_text(text, config, manage_clipboard=True, target_hwnd=None, submit=Non
         return False
 
     # Go back to where you were last writing, in case focus has drifted since.
+    if target_hwnd and is_notification_window(target_hwnd):
+        target_hwnd = None
     if target_hwnd and foreground_window() != target_hwnd:
         drifted_to = _foreground_window_title()   # read before we change it
         restored = focus_window(target_hwnd)
@@ -279,6 +287,8 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
         return paste_text(command, config, manage_clipboard=manage_clipboard, target_hwnd=target_hwnd, submit=submit)
 
     # GUI branch:
+    if target_hwnd and is_notification_window(target_hwnd):
+        target_hwnd = None
     if target_hwnd and foreground_window() != target_hwnd:
         drifted_to = _foreground_window_title()
         restored = focus_window(target_hwnd)

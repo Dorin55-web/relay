@@ -86,10 +86,15 @@ cases = [
     # foreground for an instant. Letting one become the target hijacks every
     # dictation after it.
     ("something tiny", dict(rect=(0, 0, 60, 20))),
+    ("a toast notification", dict(title="New notification")),
+    ("a toast notification by class", dict(cls="ToastWnd")),
+    ("action center control", dict(cls="ActionCenterControlHost")),
 ]
 for name, how in cases:
     windows = Windows()
-    windows.front = windows.add(200, title="Impostor", **how)
+    kw = dict(title="Impostor")
+    kw.update(how)
+    windows.front = windows.add(200, **kw)
     spy = tracker(windows)
     spy._capture()
     check(f"not {name}", spy.hwnd is None, f"took {spy.title!r}")
@@ -118,6 +123,16 @@ windows.front = windows.add(400, title="Somewhere Else")
 check("still the first one", spy.current() == 100, str(spy.current()))
 spy._capture()
 check("until you click", spy.current() == 400, str(spy.current()))
+
+
+print("\n--- a notification does not steal an existing target ---")
+windows = Windows()
+spy = tracker(windows)
+spy._capture()
+check("captured original", spy.hwnd == 100, spy.title)
+windows.front = windows.add(500, title="New notification")
+spy._capture()
+check("notification ignored, original target kept", spy.hwnd == 100, spy.title)
 
 
 print("\n--- a window that has closed is not a target ---")
