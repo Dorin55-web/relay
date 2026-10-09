@@ -32,28 +32,30 @@ check("and records no stalls", dog.stalls == 0)
 
 
 def hold_the_gil_in_here():
-    """Build a Qt window, which is what actually holds the GIL.
+    """Build a Qt window and hold the GIL without releasing it.
 
     A tight Python loop does not: CPython hands the GIL over every
     sys.getswitchinterval(), five milliseconds by default, so other threads
     keep running. Only a C call that never releases it can starve them - and
-    constructing a window for the first time is exactly such a call, which is
-    why it was the one that showed up.
+    constructing a window for the first time is one such call. PyDLL Sleep
+    guarantees the GIL is held for > 250ms even when Qt caches fonts.
     """
+    import ctypes
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
     from relay.compose import Compose
     from relay.translator import TextTranslator
 
-    win = None
-    for _ in range(3):
-        win = Compose(TextTranslator(), on_paste=lambda t: None,
-                      target_getter=lambda: "Notepad")
-        win.show()
-        app.processEvents()
-        win.close()
-        app.processEvents()
+    win = Compose(TextTranslator(), on_paste=lambda t: None,
+                  target_getter=lambda: "Notepad")
+    win.show()
+    app.processEvents()
+    win.close()
+    app.processEvents()
+
+    # PyDLL executes without releasing the Python GIL
+    ctypes.PyDLL("kernel32.dll").Sleep(300)
     return win
 
 
