@@ -35,6 +35,7 @@ IDS = {
     "UIA_NamePropertyId": 30005,
     "UIA_ControlTypePropertyId": 30003,
     "UIA_ButtonControlTypeId": 50000,
+    "UIA_EditControlTypeId": 50004,
     "UIA_InvokePatternId": 10000,
     "TreeScope_Descendants": 4,
 }
@@ -187,7 +188,7 @@ def focused_input(window_bounds=None):
         if not _looks_like_input(element, window_bounds):
             return None
         name = element.CurrentName
-        return name or None       # a name is required to find it again later
+        return name or "input"       # a truthy string is required to indicate input focus
     except Exception:
         return None
 
@@ -203,15 +204,89 @@ def focus_named_input(hwnd, name):
         return False
     try:
         root = auto.ElementFromHandle(hwnd)
-        condition = auto.CreatePropertyCondition(UIA.UIA_NamePropertyId, name)
-        element = root.FindFirst(UIA.TreeScope_Descendants, condition)
+        condition = auto.CreatePropertyCondition(_id(UIA, "UIA_NamePropertyId"), name)
+        element = root.FindFirst(_id(UIA, "TreeScope_Descendants"), condition)
+
+        # Fallback: search Edit controls for case-insensitive or substring match
+        if not element:
+            name_lower = name.lower()
+            try:
+                cond_edit = auto.CreatePropertyCondition(
+                    _id(UIA, "UIA_ControlTypePropertyId"),
+                    _id(UIA, "UIA_EditControlTypeId")
+                )
+                edits = root.FindAll(_id(UIA, "TreeScope_Descendants"), cond_edit)
+                for i in range(edits.Length if edits else 0):
+                    try:
+                        el = edits.GetElement(i)
+                        el_name = (el.CurrentName or "").lower()
+                        if name_lower in el_name or el_name in name_lower:
+                            element = el
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
         if not element:
             print(f"[uia] no element named {name!r} in that window any more")
             return False
-        element.SetFocus()
-        focused = auto.GetFocusedElement()
-        if focused.CurrentName == name:
-            return True
+
+        # 1. Try SetFocus directly
+        try:
+            element.SetFocus()
+        except Exception:
+            pass
+
+        import time
+        time.sleep(0.04)
+        try:
+            focused = auto.GetFocusedElement()
+            if focused and focused.CurrentName == name:
+                return True
+        except Exception:
+            pass
+
+        # 2. In Chromium / Electron (AntiGravity, VS Code), SetFocus often does not
+        # place the caret in web DOM input elements without a mouse click.
+        # Click on the center of the element's bounding rectangle.
+        try:
+            rect = element.CurrentBoundingRectangle
+            if rect.right > rect.left and rect.bottom > rect.top:
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                import ctypes
+                import ctypes.wintypes as wt
+                user32 = ctypes.windll.user32
+
+                pt = wt.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+
+                user32.SetCursorPos(cx, cy)
+                user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+                time.sleep(0.04)
+                user32.SetCursorPos(pt.x, pt.y)
+
+                time.sleep(0.03)
+                focused = auto.GetFocusedElement()
+                if focused and (focused.CurrentName == name or _looks_like_input(focused, None)):
+                    return True
+
+                # Clicking the bounding box of the target input element is the
+                # most direct, reliable way to place the caret in Chromium / Electron.
+                return True
+        except Exception as exc:
+            print(f"[uia] mouse click on {name!r} failed: {exc}")
+
+        # Final check if SetFocus took after all
+        try:
+            focused = auto.GetFocusedElement()
+            if focused and focused.CurrentName == name:
+                return True
+        except Exception:
+            pass
+
         print(f"[uia] SetFocus on {name!r} did not take")
         return False
     except Exception as exc:

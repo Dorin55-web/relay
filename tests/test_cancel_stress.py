@@ -389,6 +389,56 @@ def run_tests():
     test("5.3 DONE card shows done icon",
          remote_mod.ICON_DONE in api.messages[bot._card])
 
+    # ---------------------------------------------------------
+    # Group 6: Cursor Refocusing & Click Fallback on Cancel
+    # ---------------------------------------------------------
+    print("\n--- Group 6: Cursor refocusing & click fallback ---")
+
+    # 6.1: cancel_task_in_window triggers deferred refocus
+    refocused = []
+    with patch("relay.uia.click_cancel_button", return_value=True), \
+         patch("relay.injector._deferred_refocus", side_effect=lambda h, delay=0.35: refocused.append(h)):
+        res = injector_mod.cancel_task_in_window(target_hwnd=HWND)
+        test("6.1 cancel_task_in_window succeeds", res is True)
+        time.sleep(0.05)
+        test("6.1 deferred refocus was scheduled for target window", HWND in refocused)
+
+    # 6.2: focus_named_input click fallback when SetFocus does not take
+    class FakeRect:
+        left = 100
+        top = 500
+        right = 300
+        bottom = 540
+
+    class FakeElement:
+        CurrentName = "Message input"
+        CurrentBoundingRectangle = FakeRect()
+        def SetFocus(self):
+            pass
+
+    class FakeFocusedWrong:
+        CurrentName = "Select model, current: Gemini 3.8 Flash High"
+
+    class FakeAuto:
+        def ElementFromHandle(self, hwnd):
+            return self
+        def CreatePropertyCondition(self, prop, val):
+            return prop
+        def FindFirst(self, scope, cond):
+            return FakeElement()
+        def FindAll(self, scope, cond):
+            return None
+        def GetFocusedElement(self):
+            return FakeFocusedWrong()
+
+    with patch("relay.uia._uia", return_value=(FakeAuto(), MagicMock())):
+        with patch("ctypes.windll.user32.SetCursorPos") as mock_set_cursor:
+            with patch("ctypes.windll.user32.mouse_event") as mock_mouse:
+                from relay import uia as uia_mod
+                res = uia_mod.focus_named_input(HWND, "Message input")
+                test("6.2 focus_named_input succeeds via click fallback", res is True)
+                test("6.2 mouse click was sent to center of bounding box", mock_mouse.called)
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 

@@ -350,6 +350,23 @@ def paste_hybrid(step, config, target_hwnd=None, submit=None, manage_clipboard=T
             restore_clipboard(original, config)
 
 
+def _deferred_refocus(hwnd, input_name=None, delay=0.35):
+    """Best-effort refocus of the target agent input box after task cancellation."""
+    try:
+        time.sleep(delay)
+        if not input_name:
+            try:
+                from .agent import profile_for
+                prof = profile_for(hwnd)
+                input_name = (prof or {}).get("input") or "Message input"
+            except Exception:
+                input_name = "Message input"
+        from . import uia
+        uia.focus_named_input(hwnd, input_name)
+    except Exception:
+        pass
+
+
 def cancel_task_in_window(target_hwnd=None) -> bool:
     """Cancels active task by invoking the Cancel/Stop button via UIA, falling back to keystroke.
 
@@ -365,6 +382,8 @@ def cancel_task_in_window(target_hwnd=None) -> bool:
     try:
         from . import uia
         if uia.click_cancel_button(target):
+            import threading
+            threading.Thread(target=_deferred_refocus, args=(target,), daemon=True).start()
             return True
     except Exception as exc:
         print(f"[cancel] uia button click failed: {exc}")
@@ -376,6 +395,8 @@ def cancel_task_in_window(target_hwnd=None) -> bool:
         with _keyboard.pressed(Key.ctrl):
             _keyboard.press("d")
             _keyboard.release("d")
+        import threading
+        threading.Thread(target=_deferred_refocus, args=(target,), daemon=True).start()
         return True
     except Exception as exc:
         print(f"[cancel] could not send Ctrl+D: {exc}")
