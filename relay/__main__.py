@@ -22,7 +22,12 @@ from pynput import keyboard  # noqa: E402
 from . import audio as audio_mod  # noqa: E402
 from .config import load_config, write_default_config  # noqa: E402
 from .feedback import Feedback  # noqa: E402
-from .injector import paste_text, restore_clipboard, save_clipboard  # noqa: E402
+from .injector import (  # noqa: E402
+    paste_hybrid,
+    paste_text,
+    restore_clipboard,
+    save_clipboard,
+)
 from . import prompts as prompts_mod  # noqa: E402
 from .watchdog import Watchdog  # noqa: E402
 
@@ -646,15 +651,15 @@ class VoicePrompt:
         except Exception as exc:
             self.feedback.error(f"could not start the phone link: {exc}")
 
-    def _send_step(self, text, hwnd):
+    def _send_step(self, step, hwnd):
         """Paste one step of a chain and submit it.
 
         Runs on the autopilot's thread, which is what makes the sleeps inside
-        paste_text harmless. submit=True whatever the config says: a step of a
-        chain is meant to be sent, and one left sitting in the box would stop
-        the chain at the next state check anyway.
+        paste_text/paste_hybrid harmless. submit=True whatever the config says:
+        a step of a chain is meant to be sent, and one left sitting in the box
+        would stop the chain at the next state check anyway.
         """
-        return paste_text(text, self.config, target_hwnd=hwnd, submit=True)
+        return paste_hybrid(step, self.config, target_hwnd=hwnd, submit=True)
 
     def pick_look(self):
         """Open the window that chooses what the orb draws in each state."""

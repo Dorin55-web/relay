@@ -30,3 +30,7 @@ config.broken.json
 
 # Prompts waiting for an hour you named.
 later.json
+
+# Incoming photos downloaded for terminal injection
+inbox/
+.agents/

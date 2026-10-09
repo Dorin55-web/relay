@@ -300,6 +300,20 @@ def focus_input(hwnd, profile):
     return uia.focused_input(window_rect(hwnd)) is not None
 
 
+def is_terminal_profile(profile):
+    """Return True if profile represents a terminal agent window."""
+    if not profile or not isinstance(profile, dict):
+        return False
+    kind = profile.get("kind")
+    if kind == "terminal":
+        return True
+    if kind == "gui":
+        return False
+    from .target import TERMINAL_PROCESSES
+    proc = (profile.get("process") or "").lower()
+    return not profile.get("input") and (proc in TERMINAL_PROCESSES or not proc)
+
+
 def read(hwnd):
     """One look at the window: its text and its buttons, cleaned.
 

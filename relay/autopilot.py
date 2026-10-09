@@ -82,7 +82,7 @@ class Autopilot:
                  read_text=None, on_result=None,
                  poll_seconds=POLL_SECONDS,
                  countdown_seconds=COUNTDOWN_SECONDS, countdown_tick=1.0):
-        self.send = send                       # (text, hwnd) -> bool
+        self.send = send                       # (step, hwnd) -> bool
         self.read_state = read_state or agent.state
         # What the window says, so a step's answer can be read back. Only
         # called when somebody is listening for the result.
@@ -127,7 +127,7 @@ class Autopilot:
         if self.running:
             self.log("[auto] a chain is already running")
             return False
-        steps = [s for s in steps if s and s.strip()]
+        steps = [s for s in steps if (s.strip() if isinstance(s, str) else bool(s))]
         if not steps or not hwnd:
             self.log("[auto] nothing to send")
             return False
@@ -342,7 +342,13 @@ class Autopilot:
                 self.log(f"[auto] could not read the window first: {exc}")
                 self._before = None
 
-        self.log(f"[auto] step {self.index + 1}/{len(self.steps)} -> {text[:60]!r}")
+        if isinstance(text, str):
+            preview = text
+        elif isinstance(text, dict):
+            preview = text.get("caption") or text.get("type") or str({k: v for k, v in text.items() if k != "image_bytes"})
+        else:
+            preview = str(text)
+        self.log(f"[auto] step {self.index + 1}/{len(self.steps)} -> {preview[:60]!r}")
         if not self.send(text, self.hwnd):
             self.reason = "the paste failed"
             return False

@@ -105,6 +105,8 @@ HTTP_TIMEOUT = POLL_SECONDS + 15
 # is not twenty seconds' work, and a timeout here loses a photograph that was
 # most of the way there.
 PHOTO_TIMEOUT = 90
+DEFAULT_PHOTO_PROMPT = "Please analyze and explain the code/error in this image."
+
 
 # After a failure, wait before trying again, and wait longer each time. A
 # laptop that closes its lid on a train should not fill the log with one line
@@ -548,6 +550,15 @@ def call_api(token, method, params, timeout=HTTP_TIMEOUT):
     return payload.get("result")
 
 
+def download_file(token, file_path, timeout=PHOTO_TIMEOUT):
+    """Download binary file content from Telegram Bot API."""
+    clean_path = urllib.parse.quote(str(file_path).strip(), safe="/")
+    url = f"https://api.telegram.org/file/bot{token}/{clean_path}"
+    request = urllib.request.Request(url)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
 class Remote:
     """Reads messages from one chat and turns them into prompts.
 
@@ -560,7 +571,8 @@ class Remote:
 
     def __init__(self, settings, send, target_getter, log=print,
                  api=call_api, is_window=None, translate=None,
-                 on_restart=None, capture=None, keeper_watching=None):
+                 on_restart=None, capture=None, keeper_watching=None,
+                 downloader=None):
         self.settings = settings
         self.target_getter = target_getter
         # Injected for the same reason the queue injects it: whether a
@@ -570,6 +582,7 @@ class Remote:
             __import__('ctypes').windll.user32.IsWindow(hwnd)))
         self.log = log
         self.api = api
+        self.downloader = downloader
         self.pending = deque()
         # A window picked from the phone with /target. None means follow
         # whatever you last clicked into, which is what everything else does.
@@ -752,6 +765,20 @@ class Remote:
                 self.log(f"[remote] could not edit: {exc}")
                 return False
         return False
+
+    def _download(self, token, file_path):
+        """Fetch binary image bytes via injected downloader or default download_file."""
+        if self.downloader is not None:
+            try:
+                return self.downloader(token, file_path)
+            except TypeError:
+                try:
+                    return self.downloader(file_path)
+                except TypeError:
+                    clean_path = urllib.parse.quote(str(file_path).strip(), safe="/")
+                    url = f"https://api.telegram.org/file/bot{token}/{clean_path}"
+                    return self.downloader(url)
+        return download_file(token, file_path)
 
     # --- one message per batch, rewritten as it goes ----------------------
 
@@ -978,6 +1005,53 @@ class Remote:
             # Somebody else found the bot. Say nothing to them at all.
             self.log(f"[remote] ignored a message from chat {chat}")
             return
+
+        photos = message.get("photo")
+        if photos and isinstance(photos, list):
+            try:
+                best_photo = max(
+                    photos,
+                    key=lambda p: (
+                        int(p.get("width") or 0) * int(p.get("height") or 0),
+                        int(p.get("file_size") or 0),
+                    ),
+                )
+                file_id = best_photo.get("file_id")
+                if not file_id:
+                    raise RuntimeError("photo has no file_id")
+
+                file_info = self.api(
+                    self.settings["token"], "getFile", {"file_id": file_id}
+                )
+                file_path = (file_info or {}).get("file_path") if isinstance(file_info, dict) else None
+                if not file_path:
+                    raise RuntimeError(f"getFile returned no file_path for {file_id}")
+
+                image_bytes = self._download(self.settings["token"], file_path)
+
+                caption_raw = (message.get("caption") or "").strip()
+                if caption_raw:
+                    caption_en, _ = self._to_english(caption_raw)
+                    caption_en = caption_en or DEFAULT_PHOTO_PROMPT
+                else:
+                    caption_en = DEFAULT_PHOTO_PROMPT
+
+                step = {
+                    "type": "photo",
+                    "image_bytes": image_bytes,
+                    "caption": caption_en,
+                }
+                self.pending.append(step)
+                if self._card is not None and not self.pending_own_card:
+                    self._new_card()
+                self.pending_own_card = True
+                self._prompts.append(f"📷 {caption_en}")
+                self._paint(icon=ICON_WORKING, head="waiting for a free window")
+                return
+            except Exception as exc:
+                self.log(f"[remote] could not download photo: {exc}")
+                self.say(f"That came through as a photo, but could not be downloaded: {exc}")
+                return
 
         if not text:
             # A photo, a voice note, a file. There is nothing here that could

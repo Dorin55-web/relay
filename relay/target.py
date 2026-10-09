@@ -136,6 +136,72 @@ def window_process(hwnd):
         kernel32.CloseHandle(handle)
 
 
+TERMINAL_PROCESSES = {
+    "windowsterminal.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "conhost.exe",
+    "mintty.exe",
+    "alacritty.exe",
+    "wezterm-gui.exe",
+    "wezterm.exe",
+    "kitty.exe",
+    "hyper.exe",
+    "warp.exe",
+}
+
+TERMINAL_CLASSES = {
+    "ConsoleWindowClass",
+    "CASCADIA_HOSTING_WINDOW_CLASS",
+    "mintty",
+    "Alacritty",
+}
+
+
+def is_terminal_window(hwnd, profile=None) -> bool:
+    """Return True if hwnd is a terminal/console window, False if GUI.
+
+    Classifies target windows to route prompts appropriately: terminal windows
+    receive local file path references, while GUI windows receive native image
+    clipboard paste via Ctrl+V.
+    """
+    if profile is None and hwnd:
+        try:
+            from .agent import profile_for
+            profile = profile_for(hwnd)
+        except Exception:
+            profile = None
+
+    if profile is not None and isinstance(profile, dict):
+        kind = profile.get("kind")
+        if kind == "terminal":
+            return True
+        if kind == "gui":
+            return False
+        # If profile has no "input" and its process is a known terminal process:
+        prof_proc = (profile.get("process") or "").lower()
+        if not profile.get("input"):
+            if prof_proc in TERMINAL_PROCESSES:
+                return True
+            if hwnd:
+                proc = (window_process(hwnd) or "").lower()
+                if proc in TERMINAL_PROCESSES:
+                    return True
+        elif profile.get("input"):
+            return False
+
+    if hwnd:
+        proc = (window_process(hwnd) or "").lower()
+        if proc in TERMINAL_PROCESSES:
+            return True
+        cls = window_class(hwnd) or ""
+        if cls in TERMINAL_CLASSES:
+            return True
+
+    return False
+
+
 def foreground_window():
     try:
         return _u32().GetForegroundWindow()
