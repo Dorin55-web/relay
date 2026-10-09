@@ -21,6 +21,7 @@ seconds, which urllib does as well as anything.
 """
 
 import json
+import re
 import threading
 import time
 import urllib.parse
@@ -322,6 +323,11 @@ TROUBLE = (
 # explaining something.
 TROUBLE_MAX_CHARS = 160
 
+TIMESTAMP_RE = re.compile(
+    r"^(\d{1,2}:\d{2}(?::\d{2})?(\s*(am|pm))?|just now|today at \d{1,2}:\d{2})$",
+    re.IGNORECASE,
+)
+
 # Buttons, labels and chrome that come back with the text of any window and say
 # nothing about what happened.
 CHROME = (
@@ -330,6 +336,7 @@ CHROME = (
     "send message", "type / for commands", "bypass permissions",
     "dictation settings", "press and hold to record", "notifications",
     "more options for", "collapse sidebar", "show more", "just now",
+    "thought for", "thinking...",
 )
 
 
@@ -341,8 +348,48 @@ def _looks_wrong(line):
 
 
 def _is_chrome(line):
-    low = line.strip().lower()
+    s = line.strip()
+    low = s.lower()
+    if TIMESTAMP_RE.match(low):
+        return True
     return any(low == word or low.startswith(word) for word in CHROME)
+
+
+def _dedup_lines(lines):
+    """Remove exact and near-duplicate lines caused by duplicate DOM/accessibility elements and merge emojis."""
+    unique = []
+    seen = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            continue
+        norm = re.sub(r"\s+", " ", raw.lower()).strip()
+        if not norm:
+            continue
+
+        duplicate = False
+        for existing in seen:
+            if norm == existing:
+                duplicate = True
+                break
+            if len(norm) > 15 and (norm in existing or existing in norm):
+                duplicate = True
+                break
+
+        if not duplicate:
+            seen.append(norm)
+            unique.append(line)
+
+    # Merge isolated short emoji/symbol lines into previous line
+    compact = []
+    for line in unique:
+        s = line.strip()
+        if len(s) <= 4 and compact and all(ord(ch) > 127 or ch in " \t" for ch in s):
+            compact[-1] = f"{compact[-1]} {s}"
+        else:
+            compact.append(line)
+
+    return compact
 
 
 def _last_of(lines):
@@ -1722,9 +1769,10 @@ class Remote:
             return
 
         self._unreadable = False
-        asked = {p.strip() for p in self._prompts}
+        asked = {p.strip().lower() for p in self._prompts}
         lines = [ln for ln in new_lines
-                 if len(ln) > 1 and not _is_chrome(ln) and ln.strip() not in asked]
+                 if len(ln.strip()) > 0 and not _is_chrome(ln) and ln.strip().lower() not in asked]
+        lines = _dedup_lines(lines)
         # Kept whole, before the card shortens anything, because this is the
         # only moment the whole of it exists. Rebound rather than added to:
         # /more reads it from the poll thread while this runs on the queue's,

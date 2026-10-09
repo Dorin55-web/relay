@@ -870,4 +870,23 @@ check("/usage reply contains Live Quota and Activity",
       any("Live Quota" in s and "Activity" in s for s in api.sent),
       str(api.sent))
 
+print("\n--- Milestone 3: Result text deduplication and timestamp filtering ---")
+bot_dedup, api_dedup, _, _ = make()
+bot_dedup._prompts = ["Good everything is functional"]
+bot_dedup._where = "Antigravity"
+raw_new_lines = [
+    "0:45",
+    "Mă bucur mult că totul funcționează impecabil acum!",
+    "🎉",
+    "Atât trimiterea albumelor cu mai multe fotografii simultan prin Telegram (cu lipire secvențială și confirmare unică în caseta de chat), cât și monitorizarea cotelor...",
+    "Dacă mai apare orice altă nevoie sau vrei să mai optimizăm ceva, sunt aici să te ajut! Spor la lucru!",
+    "Mă bucur mult că totul funcționează impecabil acum!",
+    "🎉 Atât trimiterea albumelor cu mai multe fotografii simultan prin Telegram (cu lipire secvențială și confirmare unică în caseta de chat), cât și monitorizarea cotelor...",
+]
+bot_dedup._result(0, raw_new_lines)
+card_msg = api_dedup.messages.get(bot_dedup._card, "")
+check("timestamp 0:45 is filtered out from card", "0:45" not in card_msg, card_msg)
+check("duplicate paragraph is deduplicated", card_msg.count("Mă bucur mult") == 1, card_msg)
+check("standalone emoji is merged", "acum! 🎉" in card_msg, card_msg)
+
 sys.exit(report.finish())
