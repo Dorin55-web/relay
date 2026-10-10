@@ -225,6 +225,17 @@ def focus_named_input(hwnd, name):
     auto, UIA = _uia()
     if auto is None or not name:
         return False
+
+    # Fast path: check if currently focused element is already the target input
+    try:
+        focused = auto.GetFocusedElement()
+        if focused:
+            el_name = getattr(focused, "CurrentName", None) or ""
+            if (name and el_name and name.lower() in el_name.lower()) or _looks_like_input(focused, None):
+                return True
+    except Exception:
+        pass
+
     try:
         from .target import window_rect
         wrect = window_rect(hwnd)

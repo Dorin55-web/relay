@@ -248,6 +248,8 @@ class VoicePrompt:
                 if self.orb:
                     self.orb.set_state(IDLE)
                 return
+            if self.orb:
+                self.orb.set_state(RECORDING)
             if self.streaming:
                 # Snapshot once for the whole session; phrases paste repeatedly.
                 self._session_clipboard = save_clipboard(self.config)
