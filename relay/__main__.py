@@ -395,6 +395,8 @@ class VoicePrompt:
                               target_hwnd=self._target_hwnd):
                     self._pasted_any = True
                     self.feedback.success(text)
+                    if hasattr(self, "inplace_translator") and self.inplace_translator:
+                        self.inplace_translator.register_spoken_text(chunk, self._target_hwnd)
             except Exception as exc:
                 self.feedback.error(f"phrase failed: {exc}")
 
@@ -408,6 +410,8 @@ class VoicePrompt:
             return
         if paste_text(text, self.config, target_hwnd=self._target_hwnd):
             self.feedback.success(text)
+            if hasattr(self, "inplace_translator") and self.inplace_translator:
+                self.inplace_translator.register_spoken_text(text, self._target_hwnd)
         else:
             self.feedback.error(f"could not paste, text was: {text}")
 
@@ -444,6 +448,8 @@ class VoicePrompt:
             # <blanks> in it, and Enter would send it half-written.
             if paste_text(text, self.config, target_hwnd=target, submit=False):
                 self.feedback.success(text)
+                if hasattr(self, "inplace_translator") and self.inplace_translator:
+                    self.inplace_translator.register_spoken_text(text, target)
             else:
                 self.feedback.error(f"could not insert prompt: {text}")
         except Exception as exc:

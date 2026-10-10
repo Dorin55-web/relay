@@ -855,4 +855,106 @@ mock_kb_direct = MockKeyboard()
 res_direct = _send_ctrl_a_v(keyboard=mock_kb_direct)
 check("_send_ctrl_a_v executes without exception", res_direct is True)
 
+print("\n--- 29. Consecutive F9 presses: translation cache hands over to voice dictation ---")
+box_content = ["creează o funcție"]
+trans_calls = []
+
+class CustomMockTrans:
+    def translate(self, text):
+        trans_calls.append(text)
+        return "create a function"
+
+def mock_reader(h, n):
+    return box_content[0]
+
+def mock_setter(val):
+    box_content[0] = val
+    return True
+
+it_flow = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: CustomMockTrans(),
+    uia_reader=mock_reader,
+    uia_setter=mock_setter,
+    target_getter=lambda: type("Target", (), {"hwnd": 1234, "input_name": "prompt_box"})(),
+)
+
+# First F9: Romanian text present in box -> translates to English
+res1 = it_flow.detect_and_translate()
+check("first F9 returns True (in-place translated)", res1 is True)
+check("box content replaced with English translation", box_content[0] == "create a function")
+check("translator was called once", len(trans_calls) == 1)
+
+# Second F9: User wants to speak in Romanian -> text is ALREADY the translated English!
+res2 = it_flow.detect_and_translate()
+check("second F9 returns False (hands over to voice dictation)", res2 is False)
+check("translator was NOT called again (cached)", len(trans_calls) == 1)
+check("box content remains intact", box_content[0] == "create a function")
+
+print("\n--- 30. VoicePrompt toggle() integrates with translation cache to start microphone ---")
+vp_flow = app.VoicePrompt(cfg)
+vp_flow._ready.set()
+vp_flow.recorder = MockRecorder()
+vp_flow.orb = MockOrb()
+vp_flow.inplace_translator = it_flow
+
+# Box has "create a function", already translated
+vp_flow.state = app.IDLE
+vp_flow.toggle()
+check("VoicePrompt toggle started audio recording", vp_flow.recorder.started == 1)
+check("state transitioned to RECORDING", vp_flow.state == app.RECORDING)
+
+print("\n--- 31. Spoken text registration supports multi-turn dictation without re-translating ---")
+# Simulate voice transcription pasting into the box
+it_flow.register_spoken_text(" that returns True", hwnd=1234)
+box_content[0] = "create a function that returns True"
+
+# Third F9: User wants to dictate another phrase
+res3 = it_flow.detect_and_translate()
+check("third F9 returns False (dictation continues)", res3 is False)
+check("translator was NOT called on dictated text", len(trans_calls) == 1)
+
+print("\n--- 32. Cache reset on box erase and window switch ---")
+# User erases box
+box_content[0] = ""
+res_erase = it_flow.detect_and_translate()
+check("empty box returns False and resets cache", res_erase is False)
+check("cached translation was cleared", it_flow._last_translation is None)
+
+# User writes new Romanian text
+box_content[0] = "salut din nou"
+res_new = it_flow.detect_and_translate()
+check("new Romanian text translates successfully", res_new is True)
+check("box updated", box_content[0] == "create a function")
+check("translator called again", len(trans_calls) == 2)
+
+# Window switch
+it_flow_win = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: CustomMockTrans(),
+    uia_reader=lambda h, n: "already translated text",
+    target_getter=lambda: type("Target", (), {"hwnd": 5555, "input_name": "other_win"})(),
+)
+it_flow_win._last_translation = "already translated text"
+it_flow_win._last_translation_hwnd = 1111  # different window!
+check("different hwnd is recognized as not translated in current window", it_flow_win._is_already_translated("already translated text", 5555) is False)
+
+print("\n--- 33. Sentinel fallback mode respects translation cache ---")
+clip_sent = MockClipboard(holding="orig")
+kb_sent = MockKeyboard(clipboard=clip_sent, target_text="translated english text")
+it_sent = InplaceTranslator(
+    config=config,
+    translator_getter=lambda: CustomMockTrans(),
+    keyboard=kb_sent,
+    clipboard=clip_sent,
+    uia_reader=None,  # Forces sentinel mode
+    target_getter=lambda: type("Target", (), {"hwnd": 999, "input_name": "sent_box"})(),
+)
+it_sent._last_translation = "translated english text"
+it_sent._last_translation_hwnd = 999
+res_sent_handover = it_sent.detect_and_translate()
+check("sentinel mode returns False when text matches cache", res_sent_handover is False)
+check("sentinel clipboard restored", clip_sent.value == "orig")
+check("Right arrow pressed to deselect", any("right" in k.lower() for k in kb_sent.keys))
+
 sys.exit(report.finish())

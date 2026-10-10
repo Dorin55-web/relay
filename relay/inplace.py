@@ -144,6 +144,9 @@ class InplaceTranslator:
             except Exception:
                 self.uia_reader = None
 
+        self._last_translation: Optional[str] = None
+        self._last_translation_hwnd: Optional[int] = None
+
         if uia_setter is not None:
             self.uia_setter = uia_setter
         else:
@@ -152,6 +155,58 @@ class InplaceTranslator:
                 self.uia_setter = set_active_input_text
             except Exception:
                 self.uia_setter = None
+
+    def reset_last_translation(self):
+        """Reset the cached translation state."""
+        self._last_translation = None
+        self._last_translation_hwnd = None
+
+    def register_spoken_text(self, text: str, hwnd: Optional[int] = None):
+        """Record text inserted by voice dictation so subsequent dictations are not re-translated."""
+        clean = text.strip() if text else ""
+        if not clean:
+            return
+        if self._last_translation and (hwnd is None or hwnd == self._last_translation_hwnd):
+            self._last_translation = f"{self._last_translation} {clean}".strip()
+        else:
+            self._last_translation = clean
+        if hwnd is not None:
+            self._last_translation_hwnd = hwnd
+
+    def _is_already_translated(self, text: str, hwnd: Optional[int]) -> bool:
+        """Check if the text in the active control is already the translated/dictated content."""
+        if not self._last_translation:
+            return False
+        if (
+            hwnd is not None
+            and self._last_translation_hwnd is not None
+            and hwnd != self._last_translation_hwnd
+        ):
+            self.reset_last_translation()
+            return False
+
+        stripped = text.strip()
+        last = self._last_translation.strip()
+        if not stripped or not last:
+            return False
+
+        if stripped == last:
+            return True
+
+        norm_stripped = " ".join(stripped.split())
+        norm_last = " ".join(last.split())
+        if norm_stripped == norm_last:
+            return True
+
+        if norm_stripped.rstrip(".,!?;: \t\n\r") == norm_last.rstrip(".,!?;: \t\n\r"):
+            return True
+
+        if norm_stripped.startswith(norm_last):
+            remainder = norm_stripped[len(norm_last):].strip()
+            if not remainder or remainder in ".,!?;:":
+                return True
+
+        return False
 
     def _save(self):
         """Capture original clipboard content."""
@@ -228,10 +283,22 @@ class InplaceTranslator:
         """Inspects active box and translates Romanian text to English in-place.
 
         Returns True if in-place translation succeeded (do not record audio).
-        Returns False if box was empty or whitespace (fallback to voice dictation).
+        Returns False if box was empty, whitespace, or already translated/English (fallback to voice dictation).
         """
         target = self.target_getter() if callable(self.target_getter) else self.target_getter
         hwnd = getattr(target, "hwnd", None)
+        if not hwnd and hasattr(target, "current"):
+            try:
+                hwnd = target.current()
+            except Exception:
+                hwnd = None
+        if not hwnd:
+            try:
+                from .target import foreground_window
+                hwnd = foreground_window()
+            except Exception:
+                hwnd = None
+
         input_name = getattr(target, "input_name", None)
 
         # 1. Attempt silent UIA text extraction without keyboard selection
@@ -247,6 +314,11 @@ class InplaceTranslator:
             stripped = uia_text.strip()
             if not stripped:
                 # Empty box: silent fallback to voice dictation without ANY keystrokes
+                self.reset_last_translation()
+                return False
+
+            if self._is_already_translated(stripped, hwnd):
+                print(f"[inplace] active input matches last translated text ({len(stripped)} chars), handing over to voice dictation")
                 return False
 
             # Translate Romanian text while user screen stays completely normal
@@ -268,6 +340,13 @@ class InplaceTranslator:
 
             if english is None:
                 print("[inplace] translator returned None")
+                return False
+
+            # If translating produced the exact same string, it's already English
+            if english.strip().lower() == stripped.lower():
+                print(f"[inplace] text already in English, handing over to voice dictation")
+                self._last_translation = english.strip()
+                self._last_translation_hwnd = hwnd
                 return False
 
             elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -304,13 +383,15 @@ class InplaceTranslator:
                     self._restore(original, delay=False)
                     return False
 
+            self._last_translation = english.strip()
+            self._last_translation_hwnd = hwnd
             self._notify_success()
             return True
 
         # 2. Fallback: Clipboard Sentinel if UIA is unavailable in this control
-        return self._detect_and_translate_sentinel()
+        return self._detect_and_translate_sentinel(hwnd=hwnd)
 
-    def _detect_and_translate_sentinel(self) -> bool:
+    def _detect_and_translate_sentinel(self, hwnd: Optional[int] = None) -> bool:
         original = self._save()
         sentinel = f"__RELAY_SENTINEL_{uuid.uuid4().hex}__"
 
@@ -349,6 +430,17 @@ class InplaceTranslator:
             # Check if text is present and non-empty
             if copied == sentinel or not copied or not copied.strip():
                 # Empty box or nothing selected; restore clipboard and fallback
+                self.reset_last_translation()
+                self._restore(original, delay=False)
+                try:
+                    self._keyboard.press(Key.right)
+                    self._keyboard.release(Key.right)
+                except Exception:
+                    pass
+                return False
+
+            if self._is_already_translated(copied.strip(), hwnd):
+                print(f"[inplace] sentinel text matches last translation, handing over to voice dictation")
                 self._restore(original, delay=False)
                 try:
                     self._keyboard.press(Key.right)
@@ -383,6 +475,14 @@ class InplaceTranslator:
                 self._restore(original, delay=False)
                 return False
 
+            # If translating produced the exact same string, it's already English
+            if english.strip().lower() == copied.strip().lower():
+                print(f"[inplace] text already in English, handing over to voice dictation")
+                self._last_translation = english.strip()
+                self._last_translation_hwnd = hwnd
+                self._restore(original, delay=False)
+                return False
+
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             print(f"[inplace] translated {len(copied)} chars ro -> en in {elapsed_ms:.0f}ms (sentinel)")
 
@@ -399,6 +499,8 @@ class InplaceTranslator:
             # Restore original clipboard after short delay
             self._restore(original, delay=True)
 
+            self._last_translation = english.strip()
+            self._last_translation_hwnd = hwnd
             self._notify_success()
             return True
 
