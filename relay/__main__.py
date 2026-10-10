@@ -178,9 +178,7 @@ class VoicePrompt:
             return
         with self._lock:
             state = self.state
-        if state == IDLE:
-            self.orb.set_state(RECORDING)
-        elif state == RECORDING:
+        if state == RECORDING:
             self.orb.set_state(PROCESSING)
 
     def request_toggle(self):

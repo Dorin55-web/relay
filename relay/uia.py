@@ -447,27 +447,24 @@ def read_active_input_text(hwnd=None, name=None):
     def _extract_from(el):
         if not el:
             return None
-        # 1. ValuePattern
-        try:
-            vp = el.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
-            if vp:
-                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
-                val = v_obj.CurrentValue
-                if val is not None:
-                    return str(val)
-        except Exception:
-            pass
-        # 2. TextPattern
+        # 1. TextPattern (Checked first: accurate for modern Chromium / Electron / Monaco controls)
         try:
             tp = el.GetCurrentPattern(_id(UIA, "UIA_TextPatternId"))
             if tp:
                 t_obj = tp.QueryInterface(UIA.IUIAutomationTextPattern)
-                txt = t_obj.DocumentRange.GetText(-1)
-                if txt is not None:
-                    return str(txt)
+                doc_range = getattr(t_obj, "DocumentRange", None)
+                if doc_range is not None:
+                    txt = doc_range.GetText(-1)
+                    if txt is not None:
+                        cleaned = str(txt).replace("￼", "").replace("\ufffc", "").replace("\u200b", "").strip()
+                        el_name = getattr(el, "CurrentName", None) or ""
+                        if not cleaned or (el_name and cleaned == el_name.strip()):
+                            return ""
+                        return str(txt)
         except Exception:
             pass
-        # 3. Win32 NativeWindowHandle for standard Edit and Document controls
+
+        # 2. Win32 NativeWindowHandle for standard Edit and Document controls
         try:
             if el.CurrentControlType in (
                 _id(UIA, "UIA_EditControlTypeId"),
@@ -486,6 +483,22 @@ def read_active_input_text(hwnd=None, name=None):
                         return ""
         except Exception:
             pass
+
+        # 3. ValuePattern
+        try:
+            vp = el.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
+            if vp:
+                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
+                val = v_obj.CurrentValue
+                if val is not None:
+                    cleaned = str(val).replace("￼", "").replace("\ufffc", "").replace("\u200b", "").strip()
+                    el_name = getattr(el, "CurrentName", None) or ""
+                    if not cleaned or (el_name and cleaned == el_name.strip()):
+                        return ""
+                    return str(val)
+        except Exception:
+            pass
+
         return None
 
     try:
@@ -551,7 +564,7 @@ def read_active_input_text(hwnd=None, name=None):
         if text is None:
             return ""
 
-        cleaned = text.replace("￼", "").replace("\u200b", "").strip()
+        cleaned = text.replace("￼", "").replace("\ufffc", "").replace("\u200b", "").strip()
         if not cleaned:
             return ""
         return text
@@ -628,7 +641,13 @@ def set_active_input_text(text: str) -> bool:
                 v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
                 if not getattr(v_obj, "CurrentIsReadOnly", False):
                     v_obj.SetValue(text)
-                    return True
+                    # In Chromium / Monaco / contenteditable, SetValue returns S_OK
+                    # but is a silent no-op. Verify that CurrentValue actually updated.
+                    try:
+                        if getattr(v_obj, "CurrentValue", None) == text:
+                            return True
+                    except Exception:
+                        pass
         except Exception:
             pass
 

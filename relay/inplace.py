@@ -10,6 +10,7 @@ Activated by F9 when the focused control already contains Romanian text.
 If the box is empty, falls back to voice dictation without visual disruption.
 """
 
+import sys
 import time
 import uuid
 from typing import Any, Callable, Optional
@@ -18,6 +19,98 @@ import pyperclip
 from pynput.keyboard import Controller, Key
 
 from .injector import restore_clipboard, save_clipboard
+
+if sys.platform == "win32":
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wt.WORD),
+            ("wScan", wt.WORD),
+            ("dwFlags", wt.DWORD),
+            ("time", wt.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(wt.ULONG)),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [("uMsg", wt.DWORD), ("wParamL", wt.WORD), ("wParamH", wt.WORD)]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wt.LONG),
+            ("dy", wt.LONG),
+            ("mouseData", wt.DWORD),
+            ("dwFlags", wt.DWORD),
+            ("time", wt.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(wt.ULONG)),
+        ]
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = [
+            ("ki", KEYBDINPUT),
+            ("mi", MOUSEINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _anonymous_ = ("u",)
+        _fields_ = [("type", wt.DWORD), ("u", INPUT_UNION)]
+
+
+def _send_ctrl_a_v(keyboard=None) -> bool:
+    """Atomically send Ctrl+A and Ctrl+V in a single Win32 SendInput batch.
+
+    Putting all 6 events (Ctrl down, A down, A up, V down, V up, Ctrl up) into
+    the target window's message queue in a single syscall ensures Chromium / Electron
+    processes the selection and paste within the exact same event loop cycle before
+    scheduling any paint or compositing tick. This eliminates the visual blue selection
+    highlight completely.
+    """
+    if sys.platform == "win32":
+        try:
+            VK_CONTROL = 0x11
+            VK_A = 0x41
+            VK_V = 0x56
+            KEYEVENTF_KEYUP = 0x0002
+            INPUT_KEYBOARD = 1
+
+            events = [
+                (VK_CONTROL, 0),
+                (VK_A, 0),
+                (VK_A, KEYEVENTF_KEYUP),
+                (VK_V, 0),
+                (VK_V, KEYEVENTF_KEYUP),
+                (VK_CONTROL, KEYEVENTF_KEYUP),
+            ]
+
+            input_array = (INPUT * len(events))()
+            for i, (vk, flags) in enumerate(events):
+                input_array[i].type = INPUT_KEYBOARD
+                input_array[i].ki.wVk = vk
+                input_array[i].ki.wScan = 0
+                input_array[i].ki.dwFlags = flags
+                input_array[i].ki.time = 0
+                input_array[i].ki.dwExtraInfo = None
+
+            u32 = ctypes.windll.user32
+            sent = u32.SendInput(len(events), input_array, ctypes.sizeof(INPUT))
+            if sent == len(events):
+                return True
+        except Exception as exc:
+            print(f"[inplace] SendInput error: {exc}")
+
+    if keyboard is not None:
+        try:
+            with keyboard.pressed(Key.ctrl):
+                keyboard.press("a")
+                keyboard.release("a")
+                keyboard.press("v")
+                keyboard.release("v")
+            return True
+        except Exception:
+            return False
+    return False
 
 
 class InplaceTranslator:
@@ -109,6 +202,26 @@ class InplaceTranslator:
             except Exception as exc:
                 print(f"[inplace] audio feedback error: {exc}")
 
+    def _replace_in_active_input(self):
+        """Atomically replace active input text via Win32 SendInput (or mock keyboard)."""
+        if not isinstance(self._keyboard, Controller):
+            with self._keyboard.pressed(Key.ctrl):
+                self._keyboard.press("a")
+                self._keyboard.release("a")
+                self._keyboard.press("v")
+                self._keyboard.release("v")
+            return
+
+        if sys.platform == "win32":
+            if _send_ctrl_a_v(self._keyboard):
+                return
+
+        with self._keyboard.pressed(Key.ctrl):
+            self._keyboard.press("a")
+            self._keyboard.release("a")
+            self._keyboard.press("v")
+            self._keyboard.release("v")
+
     def detect_and_translate(self) -> bool:
         """Inspects active box and translates Romanian text to English in-place.
 
@@ -178,13 +291,10 @@ class InplaceTranslator:
                         time.sleep(paste_delay / 1000.0)
 
                     # Atomic replacement in-place:
-                    # Press Ctrl+A and Ctrl+V back-to-back with no delay so the compositor
-                    # does not display an intermediate blue selection state.
-                    with self._keyboard.pressed(Key.ctrl):
-                        self._keyboard.press("a")
-                        self._keyboard.release("a")
-                        self._keyboard.press("v")
-                        self._keyboard.release("v")
+                    # In production on Windows, sends all 6 input events in a single
+                    # Win32 SendInput syscall so Chromium replaces the text without
+                    # any visual blue selection highlight.
+                    self._replace_in_active_input()
 
                     self._restore(original, delay=True)
                 except Exception as exc:
@@ -281,12 +391,8 @@ class InplaceTranslator:
             if paste_delay > 0:
                 time.sleep(paste_delay / 1000.0)
 
-            # Replace selected text via Ctrl+A + Ctrl+V back-to-back with zero delay
-            with self._keyboard.pressed(Key.ctrl):
-                self._keyboard.press("a")
-                self._keyboard.release("a")
-                self._keyboard.press("v")
-                self._keyboard.release("v")
+            # Replace selected text via atomic Win32 SendInput with zero visual flicker
+            self._replace_in_active_input()
 
             # Restore original clipboard after short delay
             self._restore(original, delay=True)
@@ -300,4 +406,4 @@ class InplaceTranslator:
             return False
 
 
-__all__ = ["InplaceTranslator", "save_clipboard", "restore_clipboard"]
+__all__ = ["InplaceTranslator", "save_clipboard", "restore_clipboard", "_send_ctrl_a_v"]

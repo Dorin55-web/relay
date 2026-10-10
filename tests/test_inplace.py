@@ -510,7 +510,9 @@ class MockTallUIAElement:
             return None
         elem = self
         class MockVP:
-            CurrentValue = elem.text
+            @property
+            def CurrentValue(self):
+                return elem.text
             CurrentIsReadOnly = False
             def QueryInterface(self, _):
                 return self
@@ -716,5 +718,141 @@ try:
     check("translator not called on read-only control", len(trans_ro.calls) == 0)
 finally:
     uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 24. Erased box with stale ValuePattern: TextPattern priority returns empty ---")
+class MockStaleChromiumElement:
+    """Simulates Chromium/Monaco after text was cleared: TextPattern is empty, ValuePattern holds stale cached text."""
+    def __init__(self, stale_text="Text vechi sters", current_name="Message input"):
+        self.CurrentControlType = 50004  # Edit
+        self.CurrentIsKeyboardFocusable = True
+        self.CurrentName = current_name
+        self.stale_text = stale_text
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 300, "bottom": 80})()
+
+    def GetCurrentPattern(self, pattern_id):
+        elem = self
+        if pattern_id == uia._id(orig_UIA, "UIA_TextPatternId"):
+            class MockTP:
+                class DocumentRange:
+                    @staticmethod
+                    def GetText(_):
+                        return "\n"  # Empty / just a newline in Monaco
+                def QueryInterface(self, _):
+                    return self
+            return MockTP()
+        elif pattern_id == uia._id(orig_UIA, "UIA_ValuePatternId"):
+            class MockVP:
+                CurrentValue = elem.stale_text  # Stale text retained in Chromium's cache!
+                CurrentIsReadOnly = False
+                def QueryInterface(self, _):
+                    return self
+            return MockVP()
+        return None
+
+mock_stale = MockStaleChromiumElement()
+mock_stale_auto = MockUIAAutomation(mock_stale)
+uia._uia = lambda: (mock_stale_auto, orig_UIA)
+try:
+    stale_read = uia.read_active_input_text()
+    check("read_active_input_text ignores stale ValuePattern and returns empty string", stale_read == "")
+
+    clip_stale = MockClipboard("stale test clip")
+    kb_stale = MockKeyboard(clipboard=clip_stale)
+    trans_stale = MockTranslator()
+    it_stale = InplaceTranslator(
+        config=cfg_uia,
+        translator_getter=lambda: trans_stale,
+        keyboard=kb_stale,
+        clipboard=clip_stale,
+        uia_reader=uia.read_active_input_text,
+    )
+    res_stale = it_stale.detect_and_translate()
+    check("detect_and_translate returns False on erased box with stale cache", res_stale is False)
+    check("zero keystrokes emitted on erased box", len(kb_stale.keys) == 0)
+    check("translator was NOT called on erased box", len(trans_stale.calls) == 0)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 25. set_active_input_text returns False when ValuePattern.SetValue is a no-op (Chromium DOM) ---")
+class MockNoOpSetValueElement:
+    """Simulates Chromium/Monaco DOM where SetValue returns S_OK but does not update CurrentValue."""
+    def __init__(self, initial_text="text initial in romana"):
+        self.CurrentControlType = 50004
+        self.CurrentIsKeyboardFocusable = True
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 300, "bottom": 80})()
+        self.val = initial_text
+
+    def GetCurrentPattern(self, pattern_id):
+        elem = self
+        if pattern_id == uia._id(orig_UIA, "UIA_ValuePatternId"):
+            class MockVP:
+                @property
+                def CurrentValue(self):
+                    return elem.val  # Value stays unchanged (silent no-op in Chromium)
+                CurrentIsReadOnly = False
+                def QueryInterface(self, _):
+                    return self
+                def SetValue(self, val):
+                    pass  # Silent no-op
+            return MockVP()
+        return None
+
+mock_noop = MockNoOpSetValueElement()
+mock_noop_auto = MockUIAAutomation(mock_noop)
+uia._uia = lambda: (mock_noop_auto, orig_UIA)
+try:
+    noop_result = uia.set_active_input_text("english replacement")
+    check("set_active_input_text returns False when SetValue is silent no-op", noop_result is False)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 26. InplaceTranslator falls back to atomic keystroke replacement when uia_setter fails ---")
+clip_fb = MockClipboard(holding="orig user clipboard")
+kb_fb = MockKeyboard(clipboard=clip_fb)
+trans_fb = MockTranslator(prefix="TRANSLATED: ")
+orb_fb = MockOrb()
+fb_fb = MockFeedback()
+
+def failing_uia_setter(val):
+    return False  # Emulate Chromium failure
+
+it_fb = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_fb,
+    feedback=fb_fb,
+    orb_getter=lambda: orb_fb,
+    keyboard=kb_fb,
+    clipboard=clip_fb,
+    uia_reader=lambda h, n: "mesaj in romana",
+    uia_setter=failing_uia_setter,
+)
+res_fb = it_fb.detect_and_translate()
+check("detect_and_translate succeeds via fallback replacement", res_fb is True)
+check("translator received Romanian text", trans_fb.calls == ["mesaj in romana"])
+check("fallback replacement simulated Ctrl+A", "press a" in kb_fb.keys)
+check("fallback replacement simulated Ctrl+V", "press v" in kb_fb.keys)
+check("user clipboard restored intact", clip_fb.value == "orig user clipboard")
+check("orb pulsed cyan", orb_fb.pulses == [("cyan", 500)])
+check("feedback success chime called", fb_fb.success_count == 1)
+
+print("\n--- 27. Optimistic UI does NOT prematurely turn orb blue in IDLE state ---")
+vp_opt = app.VoicePrompt(cfg)
+vp_opt._ready.set()
+vp_opt.state = app.IDLE
+vp_opt.orb = MockOrb()
+vp_opt.orb.state = "idle"
+
+vp_opt._optimistic_ui()
+check("orb state remains idle (no premature blue ring on F9 press)", vp_opt.orb.state == "idle")
+
+vp_opt.state = app.RECORDING
+vp_opt._optimistic_ui()
+check("orb state becomes processing when stopping recording", vp_opt.orb.state == app.PROCESSING)
+
+print("\n--- 28. _send_ctrl_a_v helper function ---")
+from relay.inplace import _send_ctrl_a_v
+mock_kb_direct = MockKeyboard()
+res_direct = _send_ctrl_a_v(keyboard=mock_kb_direct)
+check("_send_ctrl_a_v executes without exception", res_direct is True)
 
 sys.exit(report.finish())
