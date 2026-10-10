@@ -405,13 +405,13 @@ class Orb(QWidget):
             self.menu.addAction(edit_act)
 
         if self.on_notes is not None:
-            notes_act = QAction("Notes & Ideas...", self)
+            notes_act = QAction("Notes && Ideas...", self)
             notes_act.setToolTip("View and save your ideas, prompts and notes")
             notes_act.triggered.connect(self._fire_notes)
             self.menu.addAction(notes_act)
 
         self.menu.addSeparator()
-        dictate_act = QAction(f"Dictate  ({tooltip})", self)
+        dictate_act = QAction(f"Dictate ({tooltip})", self)
         dictate_act.triggered.connect(self._fire_toggle)
         self.menu.addAction(dictate_act)
 

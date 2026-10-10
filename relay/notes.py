@@ -42,7 +42,7 @@ DEFAULT_NOTES = [
     }
 ]
 
-MAX_TARGET_CHARS = 24
+MAX_TARGET_CHARS = 18
 TARGET_POLL_MS = 750
 DEBOUNCE_SAVE_MS = 600
 ROW_HEIGHT = 44
@@ -351,12 +351,16 @@ class NotesWindow(FramelessWindow):
         )
         self.save_btn.clicked.connect(self._explicit_save)
 
+        content_header = QHBoxLayout()
+        content_header.addWidget(self._caption("NOTE CONTENT"))
+        content_header.addStretch(1)
+        content_header.addWidget(self.status_label)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
-        footer.addWidget(self.status_label)
         footer.addStretch(1)
         footer.addWidget(self.paste_btn)
         footer.addWidget(self.copy_btn)
@@ -368,7 +372,7 @@ class NotesWindow(FramelessWindow):
         right.addWidget(self._caption("TITLE & CATEGORY"))
         right.addLayout(header_row)
         right.addSpacing(4)
-        right.addWidget(self._caption("NOTE CONTENT"))
+        right.addLayout(content_header)
         right.addWidget(self.text_editor, 1)
         right.addLayout(footer)
 
@@ -581,9 +585,11 @@ class NotesWindow(FramelessWindow):
         self._target_shown = target
         if target:
             self.paste_btn.setText(f"Paste to {target}")
+            self.paste_btn.setToolTip(f"Paste into: {raw}")
             self.paste_btn.setEnabled(True)
         else:
             self.paste_btn.setText("Paste to Window")
+            self.paste_btn.setToolTip("Paste into active window")
             self.paste_btn.setEnabled(False)
 
     def _paste_active(self):
