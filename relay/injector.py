@@ -405,7 +405,26 @@ def cancel_task_in_window(target_hwnd=None) -> bool:
     except Exception as exc:
         print(f"[cancel] uia button click failed: {exc}")
 
-    # 2. Fallback: bring window to foreground and inject keystroke
+    # 2. In AntiGravity, if the cancel/stop button is not found via UIA, the agent is
+    # ALREADY finished, idle, or waiting for input. In AntiGravity, sending a raw Ctrl+D
+    # when no cancel button exists toggles the Auxiliary Pane / Conversation History,
+    # splitting the editor and causing focus to drift into the newly opened chat.
+    # Therefore, never inject blind Ctrl+D into AntiGravity when no cancel button exists.
+    try:
+        from .agent import profile_for
+        from .target import window_process, window_title
+        prof = profile_for(target) if target else None
+        proc = (window_process(target) or "").lower()
+        title = (window_title(target) or "").lower()
+        if (prof and prof.get("name") == "Antigravity") or "antigravity" in proc or "antigravity" in title:
+            print("[cancel] AntiGravity has no active cancel button; skipping blind Ctrl+D to protect chat layout")
+            import threading
+            threading.Thread(target=_deferred_refocus, args=(target,), daemon=True).start()
+            return True
+    except Exception as exc:
+        print(f"[cancel] profile check failed: {exc}")
+
+    # 3. Fallback for other environments: bring window to foreground and inject keystroke
     focus_window(target)
     time.sleep(0.08)
     try:

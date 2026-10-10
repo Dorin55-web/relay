@@ -371,7 +371,12 @@ def click_cancel_button(hwnd, candidate_names=None):
         "stop tasks",
         "stop execution",
         "stop generation",
+        "cancel generation",
+        "cancel prompt",
+        "cancel task",
         "cancel",
+        "stop",
+        "abort",
     ] if candidate_names is None else [n.lower() for n in candidate_names]
 
     try:
