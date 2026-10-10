@@ -499,7 +499,7 @@ class VoicePrompt:
             self._listener.start()
 
     def _request_prebuild(self):
-        """Ask the GUI thread to build the write window while nobody is waiting.
+        """Ask the GUI thread to prebuild the notes window while nobody is waiting.
 
         Called from the model-loading thread, so it cannot touch widgets
         itself. singleShot with the orb as receiver queues the call onto the
@@ -509,37 +509,23 @@ class VoicePrompt:
             return
         from PySide6.QtCore import QTimer
 
-        QTimer.singleShot(0, self.orb, self._prebuild_compose)
+        QTimer.singleShot(0, self.orb, self._prebuild_notes)
 
-    def _prebuild_compose(self):
-        from .compose import prebuild
-
-        if self.text_translator is None:
-            from .translator import TextTranslator
-
-            self.text_translator = TextTranslator(self.config)
+    def _prebuild_notes(self):
         try:
             started = time.perf_counter()
-            with self._hooks_down("the write window"):
-                prebuild(
-                    self.text_translator,
+            from .notes import prebuild as prebuild_notes
+            with self._hooks_down("the notes window"):
+                prebuild_notes(
                     on_paste=self.insert_prompt,
                     target_getter=lambda: (
                         self.tracker.title if self.tracker is not None else None
                     ),
                 )
-            print(f"[compose] built ahead of time in "
+            print(f"[notes] built ahead of time in "
                   f"{(time.perf_counter() - started) * 1000:.0f}ms")
-            from .notes import prebuild as prebuild_notes
-            prebuild_notes(
-                on_paste=self.insert_prompt,
-                target_getter=lambda: (
-                    self.tracker.title if self.tracker is not None else None
-                ),
-            )
         except Exception as exc:
-            # Not fatal: the window is simply built on the click instead.
-            print(f"[compose] could not prebuild: {exc}")
+            print(f"[notes] could not prebuild: {exc}")
 
     def open_notes(self):
         """Open the notes & ideas window. Called from the menu, so already on the GUI thread."""
@@ -555,30 +541,6 @@ class VoicePrompt:
                 )
         except Exception as exc:
             self.feedback.error(f"could not open the notes window: {exc}")
-
-    def open_compose(self):
-        """The typed-text window. Called from the menu, so on the GUI thread."""
-        from .compose import open_compose
-
-        if self.text_translator is None:
-            from .translator import TextTranslator
-
-            self.text_translator = TextTranslator(self.config)
-
-        try:
-            with self._hooks_down("the write window"):
-                open_compose(
-                    self.text_translator,
-                    # The same route a template insert takes.
-                    on_paste=self.insert_prompt,
-                    # Read each time, not once: the target follows your clicks
-                    # and can change while the window sits open.
-                    target_getter=lambda: (
-                        self.tracker.title if self.tracker is not None else None
-                    ),
-                )
-        except Exception as exc:
-            self.feedback.error(f"could not open the write window: {exc}")
 
     def edit_prompts(self):
         """Open the editor window. Called from the menu, so already on the GUI thread."""
@@ -841,7 +803,6 @@ class VoicePrompt:
             prompts_getter=prompts_mod.load,
             on_prompt=self.insert_prompt,
             on_edit_prompts=self.edit_prompts,
-            on_compose=self.open_compose,
             on_pick_look=self.pick_look,
             on_chain=self.open_chain,
             on_notes=self.open_notes,

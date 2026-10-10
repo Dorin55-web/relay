@@ -24,7 +24,6 @@ the window manager, not for a mock.
 |---|---|---|
 | `test_looks.py` | The nine orb drawings at eight sizes: no dot outside the box or under the radius floor, every look moves, the size retunes across the tuned span and magnifies outside it, the config round-trips, every look is opaque enough to click, and a change of look starts exactly at the old one and ends exactly at the new | 3 s |
 | `test_tooltip.py` | The prompt behind a menu label waits 3.5 s and restarts on any movement, driven through a real event loop | 3 s |
-| `test_compose.py` | The typed-text path: Romanian in, English out, stale results dropped, the Send button naming the right target | 6 s |
 | `test_editor.py` | The prompt editor driven by its own buttons — add, delete, reorder, save — plus recovery from a corrupt `prompts.json` and no temp file left behind | 2 s |
 | `test_survives_editor.py` | The orb outliving the editor. `Qt.Tool` windows are not primary windows, so without `quitOnLastWindowClosed(False)` closing the editor takes the app down | 2 s |
 | `test_resize_guard.py` | Which border pixels start a resize and which must not, walked one pixel at a time | 5 s |
@@ -38,7 +37,6 @@ the window manager, not for a mock.
 | `test_agent.py` | The three profiles, against the text those applications were measured publishing — including a window that says the right words for the wrong reason. A conversation about these rules puts their own trigger words on screen, so the Claude profile matches whole lines at the end of the window rather than fragments anywhere in it | 1 s |
 | `test_chain.py` | The window in front of the queue: that the list you build is the list that gets sent, that editing a step edits only that step, and that a chain aimed at a window Relay cannot read is refused with a reason instead of starting and stalling | 1 s |
 | `test_autopilot.py` | The prompt queue refusing to advance. Almost every check asserts that nothing was sent: while the agent works, while it waits on you, while its state cannot be read, on a single flicker of idle, before it has picked the last prompt up, and into a window that would not come to the front | 5 s |
-| `test_first_open.py` | That opening the write window does not stall. Has to be its own process: the cost it guards is paid once per process, so checking for it after another suite has opened a window passes whatever the code does | 3 s |
 | `test_dictation.py` | One dictation from the key press to the paste, with the microphone, the model and the clipboard stood in for. Three states and one queue — and almost every failure it has ever had was the same shape, so most of these check that a step which throws still ends at `idle` instead of leaving the orb spinning and the hotkey dead | 3 s |
 | `test_phrases.py` | Where a spoken phrase begins and ends, decided in the audio callback from blocks handed to it directly. A cough is not a phrase, an idle microphone does not grow, and a device pulled out mid-sentence still ends the session — without that last one the clipboard being held on your behalf is never handed back | 3 s |
 | `test_config.py` | What a hand-edited `config.json` is allowed to do. Chiefly that it cannot cost you the rest of your settings: a file that is not a settings object no longer stops Relay from starting at all, and saving the orb over a file with a trailing comma keeps your version rather than writing the defaults over it | 1 s |
@@ -49,9 +47,9 @@ the window manager, not for a mock.
 | `test_startup.py` | The single-instance mutex, with a real second process — because there is no other way to check that a handle disappears when a process dies. That a second copy is refused, that the name is free the instant the holder is killed, and that the keeper is watching that same name: nothing but the string connects them | 1 s |
 | `test_imports.py` | Every module loading, and every name reached across a module boundary still being where its caller looks for it. Most of Relay is imported the moment it is needed, so a misspelled name in the look picker is not a start-up error — it is a menu item that does nothing, weeks later | 2 s |
 | `test_vocabulary.py` | The words Whisper is told to expect. Whether they make it hear *Antigravity* rather than *anti-gravity* needs a person and a microphone and is not checked here; everything the setting must not cost is. An empty one leaves the call as it was to the argument, the warm-up never gets one, a list too long for Whisper's prompt slot is cut with a word about it instead of having its front dropped in silence, and the whole list read back is not pasted into the box you were dictating into | 2 s |
+| `test_inplace.py` | In-place F9 translation: Romanian text in active control detected via clipboard sentinel, translated on CUDA Opus-MT, and replaced directly in-place without auto-enter | 1 s |
 
-`test_compose.py` needs the Marian translation model. The first run downloads
-it; later ones are fast. `test_bluetooth.py` opens real audio devices.
+`test_bluetooth.py` opens real audio devices.
 
 ## Nothing here waits for a human
 

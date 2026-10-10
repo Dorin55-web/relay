@@ -419,14 +419,6 @@ class Orb(QWidget):
         dictate_act.triggered.connect(self._fire_toggle)
         self.menu.addAction(dictate_act)
 
-        if self.on_compose is not None:
-            write_act = QAction("Write instead...", self)
-            write_act.setToolTip(
-                "Type Romanian and send the English where you were writing"
-            )
-            write_act.triggered.connect(self._fire_compose)
-            self.menu.addAction(write_act)
-
         if self.on_chain is not None:
             chain_act = QAction("Run a chain of prompts...", self)
             chain_act.setToolTip(
@@ -571,14 +563,6 @@ class Orb(QWidget):
             self.on_prompt(text)
         except Exception as exc:
             print(f"[orb] could not insert prompt: {exc}")
-
-    def _fire_compose(self):
-        if self.on_compose is None:
-            return
-        try:
-            self.on_compose()
-        except Exception as exc:
-            print(f"[orb] could not open the write window: {exc}")
 
     def _fire_pick_look(self):
         if self.on_pick_look is None:

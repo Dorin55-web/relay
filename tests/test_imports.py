@@ -39,7 +39,6 @@ REACHED_ACROSS = {
     "relay.chain": ["open_chain", "running_window"],
     "relay.chains": ["load", "names", "steps_for", "save", "save_chain",
                      "CHAINS_PATH"],
-    "relay.compose": ["open_compose", "prebuild"],
     "relay.config": ["load_config", "write_default_config", "save_orb",
                      "normalise_orb", "ORB_SLOTS", "SLOT_LABELS"],
     "relay.cuda_setup": ["enable_cuda_dlls", "cuda_device_count"],

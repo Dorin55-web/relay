@@ -44,11 +44,9 @@ def hold_the_gil_in_here():
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
-    from relay.compose import Compose
-    from relay.translator import TextTranslator
+    from relay.prompt_editor import PromptEditor
 
-    win = Compose(TextTranslator(), on_paste=lambda t: None,
-                  target_getter=lambda: "Notepad")
+    win = PromptEditor()
     win.show()
     app.processEvents()
     win.close()

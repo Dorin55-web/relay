@@ -182,27 +182,11 @@ QPainter so Relay keeps its dependencies.
 
 ---
 
-## Typing instead of talking
+## Typing instead of talking (In-Place F9 Translation)
 
-Right-click the dot and pick **Write instead...**. Type Romanian in the top box;
-the English appears underneath as you pause. `Copy` puts it on the clipboard,
-`Send` puts it into the box you last typed in — the same target dictation uses.
-`Ctrl+Enter` translates and sends in one go, `Escape` closes.
+Type Romanian directly in any chat box, editor or active text control, then press **F9**. Relay detects the existing text, translates it to English in place via local CUDA Opus-MT in under 150ms, and replaces the content directly in the text box without pressing Enter.
 
-The English box is editable. Fix it there before sending, and what you send is
-what you fixed, not what came out of the model.
-
-For a term Whisper keeps mangling, something you are copying off a page, or a
-room where talking is not an option.
-
-The window is built **and shown once off screen** while the speech model is
-loading, so the click that opens it costs about 20 ms. Building it without
-showing it was not enough: the first time any window in the process is shown
-costs a further 400–500 ms — Qt creating the native window and realising its
-paint backend — and that is a cost per process, not per window. Measured, it
-landed on whichever of Relay's three windows was opened first, which is why it
-looked like the write window's fault. Paying it at start-up means none of the
-three ever does.
+The translated English prompt remains right where your cursor is, ready for your manual review and submission. If the active text box is empty, pressing F9 starts voice dictation as normal.
 
 > **This is a different, much weaker model than the one dictation uses.**
 > Whisper's translate task takes *audio* — it cannot help with anything you

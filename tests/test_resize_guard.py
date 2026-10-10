@@ -15,9 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 app = QApplication.instance() or QApplication(sys.argv)
 
-from relay.compose import Compose  # noqa: E402
 from relay.prompt_editor import PromptEditor  # noqa: E402
-from relay.translator import TextTranslator  # noqa: E402
 from relay.window import RESIZE_MARGIN  # noqa: E402
 
 fails = []
@@ -56,64 +54,38 @@ def survey(win, label):
     return live, blocked
 
 
-print("\n--- the write window ---")
-tr = TextTranslator()
-compose = Compose(tr, on_paste=lambda t: None, target_getter=lambda: "Notepad")
-live, blocked = survey(compose, "write window")
+print("\n--- the prompt editor gets the border and control guards ---")
+editor = PromptEditor()
+live, blocked = survey(editor, "prompt editor")
 
 check("some of the border still resizes", len(live) > 0,
       "a frameless window has to be resizable somewhere")
-print(f"    (controls reach the strip nowhere: {len(blocked)} blocked points)")
 
-# A press that lands on a control must never resize, whatever the margin says.
-# Below the buttons is bare window and should still resize - every window does
-# from its bottom edge - so the point to check is one *on* a control.
-for widget, name in ((compose.paste_btn, "Send button"),
-                     (compose.source, "Romanian box"),
-                     (compose.output, "English box")):
-    centre = widget.mapTo(compose, widget.rect().center())
-    check(f"no resize on the {name}",
-          not compose._resize_edges_at(QPointF(centre)))
-    edge = widget.mapTo(compose, widget.rect().topLeft())
-    check(f"nor at the edge of the {name}",
-          not compose._resize_edges_at(QPointF(edge.x() + 1, edge.y() + 1)))
-
-# Every corner and edge of the bare window still has to work, including the
-# top ones the title bar spans.
+# Corners work
 corners = {
     "top-left": (QPointF(2, 2), Qt.LeftEdge | Qt.TopEdge),
-    "top-right": (QPointF(compose.width() - 3, 2), Qt.RightEdge | Qt.TopEdge),
-    "bottom-left": (QPointF(2, compose.height() - 3), Qt.LeftEdge | Qt.BottomEdge),
-    "bottom-right": (QPointF(compose.width() - 3, compose.height() - 3),
+    "top-right": (QPointF(editor.width() - 3, 2), Qt.RightEdge | Qt.TopEdge),
+    "bottom-left": (QPointF(2, editor.height() - 3), Qt.LeftEdge | Qt.BottomEdge),
+    "bottom-right": (QPointF(editor.width() - 3, editor.height() - 3),
                      Qt.RightEdge | Qt.BottomEdge),
-    "top edge": (QPointF(compose.width() / 2, 2), Qt.TopEdge),
-    "left edge": (QPointF(2, compose.height() / 2), Qt.LeftEdge),
+    "top edge": (QPointF(editor.width() / 2, 2), Qt.TopEdge),
+    "left edge": (QPointF(2, editor.height() / 2), Qt.LeftEdge),
 }
 for name, (point, expected) in corners.items():
     check(f"the {name} still resizes",
-          compose._resize_edges_at(point) == expected,
-          f"got {compose._resize_edges_at(point)}, wanted {expected}")
+          editor._resize_edges_at(point) == expected,
+          f"got {editor._resize_edges_at(point)}, wanted {expected}")
 
-print("\n--- the prompt editor gets the same guard ---")
-editor = PromptEditor()
-live2, blocked2 = survey(editor, "prompt editor")
-check("editor resizes somewhere", len(live2) > 0)
-
-check("its corners work too",
-      editor._resize_edges_at(QPointF(2, 2)) == (Qt.LeftEdge | Qt.TopEdge))
-check("and its top edge, under the title bar",
-      editor._resize_edges_at(QPointF(editor.width() / 2, 2)) == Qt.TopEdge)
 for w, n in ((editor.list, "list"), (editor.text, "prompt box")):
     c = w.mapTo(editor, w.rect().center())
     check(f"no resize on the editor {n}", not editor._resize_edges_at(QPointF(c)))
 
 print("\n--- the middle was never live and still is not ---")
-for win, name in ((compose, "write"), (editor, "editor")):
-    middle = QPointF(win.width() / 2, win.height() / 2)
-    check(f"{name}: centre does nothing", not win._resize_edges_at(middle))
-    inside = QPointF(RESIZE_MARGIN + 6, win.height() / 2)
-    check(f"{name}: just inside the margin does nothing",
-          not win._resize_edges_at(inside))
+middle = QPointF(editor.width() / 2, editor.height() / 2)
+check("editor: centre does nothing", not editor._resize_edges_at(middle))
+inside = QPointF(RESIZE_MARGIN + 6, editor.height() / 2)
+check("editor: just inside the margin does nothing",
+      not editor._resize_edges_at(inside))
 
 print("\n--- a window has a visible edge, all the way round ---")
 # Reported as "the top border is missing". It was not missing: it was drawn in
@@ -146,12 +118,12 @@ for side, colour in edges.items():
 print("\n--- and all four wear the same one ---")
 from relay.chain import ChainWindow                  # noqa: E402
 from relay.look_picker import LookPicker             # noqa: E402
+from relay.notes import NotesWindow                  # noqa: E402
 
-for window_class in (Compose, PromptEditor, LookPicker, ChainWindow):
+for window_class in (PromptEditor, LookPicker, ChainWindow, NotesWindow):
     check(f"{window_class.__name__}", window_class.border_colour == EDGE,
           window_class.border_colour)
 
-compose.close()
 editor.close()
 app.processEvents()
 
