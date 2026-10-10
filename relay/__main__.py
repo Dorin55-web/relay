@@ -663,6 +663,18 @@ class VoicePrompt:
         """
         return self._get_translator().translate(text)
 
+    def _translate_voice(self, audio):
+        """Audio array -> English text using the loaded WhisperEngine."""
+        if not self._ready.is_set():
+            self._ready.wait(timeout=15.0)
+        if not self.engine:
+            return ""
+        try:
+            return self.engine.translate(audio)
+        except Exception as exc:
+            print(f"[remote] whisper translation error: {exc}")
+            return ""
+
     def _start_remote(self):
         """Start the phone side, if a token has been put in telegram.json.
 
@@ -688,6 +700,7 @@ class VoicePrompt:
                     self.tracker.current() if self.tracker is not None else None
                 ),
                 translate=self._to_english,
+                speech_translator=self._translate_voice,
                 # /restart from the phone. Quitting is only a repair when
                 # something else is watching for the gap, so this is
                 # handed over rather than assumed.

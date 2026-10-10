@@ -630,7 +630,7 @@ class Remote:
     def __init__(self, settings, send, target_getter, log=print,
                  api=call_api, is_window=None, translate=None,
                  on_restart=None, capture=None, keeper_watching=None,
-                 downloader=None, canceller=None):
+                 downloader=None, canceller=None, speech_translator=None):
         self.settings = settings
         self.target_getter = target_getter
         self.canceller = canceller or cancel_task_in_window
@@ -642,6 +642,7 @@ class Remote:
         self.log = log
         self.api = api
         self.downloader = downloader
+        self.speech_translator = speech_translator
         self.pending = deque()
         # A window picked from the phone with /target. None means follow
         # whatever you last clicked into, which is what everything else does.
@@ -1199,6 +1200,63 @@ class Remote:
             except Exception as exc:
                 self.log(f"[remote] could not download photo: {exc}")
                 self.say(f"That came through as a photo, but could not be downloaded: {exc}")
+                return
+
+        voice = message.get("voice") or message.get("audio")
+        if voice and isinstance(voice, dict) and self.speech_translator is not None:
+            try:
+                file_id = voice.get("file_id")
+                if not file_id:
+                    raise RuntimeError("voice message has no file_id")
+
+                status_msg_id = self.say("🎙️ <i>Listening & translating voice note...</i>", html=True)
+
+                file_info = self.api(
+                    self.settings["token"], "getFile", {"file_id": file_id}
+                )
+                file_path = (file_info or {}).get("file_path") if isinstance(file_info, dict) else None
+                if not file_path:
+                    raise RuntimeError(f"getFile returned no file_path for {file_id}")
+
+                audio_bytes = self._download(self.settings["token"], file_path)
+
+                prompt_en = None
+                try:
+                    import io
+                    from faster_whisper.audio import decode_audio
+
+                    audio_array = decode_audio(io.BytesIO(audio_bytes), sampling_rate=16000)
+                    prompt_en = (self.speech_translator(audio_array) or "").strip()
+                except Exception as exc:
+                    self.log(f"[remote] voice decoding/translation error: {exc}")
+                    prompt_en = None
+
+                if not prompt_en:
+                    msg = "⚠️ <b>Could not recognize any speech.</b>\nTry speaking a bit clearer or closer to your phone."
+                    if status_msg_id:
+                        self.edit(status_msg_id, msg)
+                    else:
+                        self.say(msg, html=True)
+                    return
+
+                if status_msg_id:
+                    self.edit(
+                        status_msg_id,
+                        f"🎙️ <b>Transcribed & Translated:</b>\n"
+                        f"<i>\"{_esc(prompt_en)}\"</i>\n\n"
+                        f"⏳ <i>Queued for execution...</i>",
+                    )
+
+                self.pending.append(prompt_en)
+                if self._card is not None and not self.pending_own_card:
+                    self._new_card()
+                self.pending_own_card = True
+                self._prompts.append(f"🎙️ {prompt_en}")
+                self._paint(icon=ICON_WORKING, head="waiting for a free window")
+                return
+            except Exception as exc:
+                self.log(f"[remote] could not process voice message: {exc}")
+                self.say(f"Voice message could not be processed: {exc}")
                 return
 
         if not text:

@@ -60,6 +60,13 @@ class Api:
             "message": {"chat": {"id": chat}, "text": text},
         })
 
+    def feed_voice(self, file_id="voice_1", chat=MINE, update_id=None, is_audio=False):
+        key = "audio" if is_audio else "voice"
+        self.updates.append({
+            "update_id": update_id if update_id is not None else len(self.updates) + 1,
+            "message": {"chat": {"id": chat}, key: {"file_id": file_id}},
+        })
+
     def feed_callback(self, query_id="cq_1", data="cancel_task", chat=MINE, update_id=None):
         self.updates.append({
             "update_id": update_id if update_id is not None else len(self.updates) + 1,
@@ -99,10 +106,13 @@ class Api:
         if method == "answerCallbackQuery":
             self.answered_callbacks.append(params)
             return True
+        if method == "getFile":
+            return {"file_id": params.get("file_id"), "file_path": f"voice/{params.get('file_id')}.oga"}
         raise AssertionError(f"unexpected method {method}")
 
 
-def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None):
+def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None,
+         downloader=None, speech_translator=None):
     tmp = Path(tempfile.mkdtemp(prefix="relay-remote-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -120,6 +130,8 @@ def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None):
         # not a thing a test may depend on.
         keeper_watching=lambda: watched,
         canceller=canceller,
+        downloader=downloader,
+        speech_translator=speech_translator,
     )
     bot.alive = alive
     bot.pilot.read_state = states or (lambda _h: agent.IDLE)
@@ -896,5 +908,108 @@ check("/notes add replied with confirmation", any("Idea saved" in s for s in api
 api_notes.sent.clear()
 bot_notes._handle({"update_id": 100, "message": {"chat": {"id": MINE}, "text": "/notes"}})
 check("/notes lists saved ideas", any("Build autonomous voice" in s for s in api_notes.sent), str(api_notes.sent))
+
+print("\n--- Milestone 5: Telegram voice notes transcription and translation ---")
+import io
+import wave
+import numpy as np
+
+def make_dummy_wave_bytes():
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b'\x00\x00' * 1600)
+    return buf.getvalue()
+
+dummy_wave = make_dummy_wave_bytes()
+
+# 1. Voice note is downloaded, decoded, translated, confirmed and queued
+called_audio = []
+def mock_speech_translator(audio):
+    called_audio.append(audio)
+    return "Create a new Python script"
+
+bot_voice, api_voice, _, _ = make(
+    downloader=lambda _token, _path: dummy_wave,
+    speech_translator=mock_speech_translator,
+)
+bot_voice.api.feed_voice(file_id="voice_123", chat=MINE)
+bot_voice._handle(bot_voice.api.updates.pop())
+
+check("speech translator was called with numpy audio array",
+      len(called_audio) == 1 and isinstance(called_audio[0], np.ndarray) and len(called_audio[0]) == 1600,
+      f"{len(called_audio)}")
+check("voice status indicator was sent first",
+      any("Listening &amp; translating" in s or "Listening & translating" in s or "Listening" in s for s in api_voice.sent),
+      str(api_voice.sent))
+check("voice status message was edited with translated prompt",
+      any("Create a new Python script" in e and ("Transcribed" in e or "Translated" in e) for e in api_voice.edits),
+      str(api_voice.edits))
+check("translated prompt was appended to pending queue",
+      list(bot_voice.pending) == ["Create a new Python script"],
+      str(list(bot_voice.pending)))
+check("translated prompt was recorded in _prompts",
+      "🎙️ Create a new Python script" in bot_voice._prompts,
+      str(bot_voice._prompts))
+
+# 2. Audio message (as opposed to voice) is also handled
+called_audio.clear()
+bot_audio, api_audio, _, _ = make(
+    downloader=lambda _token, _path: dummy_wave,
+    speech_translator=mock_speech_translator,
+)
+bot_audio.api.feed_voice(file_id="audio_456", chat=MINE, is_audio=True)
+bot_audio._handle(bot_audio.api.updates.pop())
+check("audio format calls speech translator",
+      len(called_audio) == 1,
+      str(len(called_audio)))
+check("audio prompt was queued",
+      list(bot_audio.pending) == ["Create a new Python script"],
+      str(list(bot_audio.pending)))
+
+# 3. Empty or unrecognized speech informs user without queueing
+bot_empty, api_empty, _, _ = make(
+    downloader=lambda _token, _path: dummy_wave,
+    speech_translator=lambda _a: "",
+)
+bot_empty.api.feed_voice(file_id="voice_silent", chat=MINE)
+bot_empty._handle(bot_empty.api.updates.pop())
+check("empty speech does not queue any prompt",
+      len(bot_empty.pending) == 0,
+      str(list(bot_empty.pending)))
+check("user notified when speech not recognized",
+      any("Could not recognize any speech" in e for e in api_empty.edits) or any("Could not recognize any speech" in s for s in api_empty.sent),
+      f"edits: {api_empty.edits}, sent: {api_empty.sent}")
+
+# 4. Downloader failure is handled gracefully
+def raising_downloader(_token, _path):
+    raise RuntimeError("Download timeout")
+
+bot_fail, api_fail, _, _ = make(
+    downloader=raising_downloader,
+    speech_translator=mock_speech_translator,
+)
+bot_fail.api.feed_voice(file_id="voice_bad", chat=MINE)
+bot_fail._handle(bot_fail.api.updates.pop())
+check("download failure notifies user",
+      any("could not be processed" in s for s in api_fail.sent),
+      str(api_fail.sent))
+check("download failure does not queue",
+      len(bot_fail.pending) == 0,
+      str(list(bot_fail.pending)))
+
+# 5. Stranger sending voice note is silently ignored
+called_audio.clear()
+bot_stranger, api_stranger, _, _ = make(
+    downloader=lambda _token, _path: dummy_wave,
+    speech_translator=mock_speech_translator,
+)
+bot_stranger.api.feed_voice(file_id="voice_stranger", chat=THEIRS)
+bot_stranger._handle(bot_stranger.api.updates.pop())
+check("stranger voice is ignored in silence",
+      len(api_stranger.sent) == 0 and len(called_audio) == 0,
+      f"sent: {api_stranger.sent}, called: {len(called_audio)}")
 
 sys.exit(report.finish())
