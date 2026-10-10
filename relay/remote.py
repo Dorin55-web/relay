@@ -963,6 +963,11 @@ class Remote:
             self.log(f"[remote] could not publish the command list: {exc}")
 
     def _run(self):
+        try:
+            from .target import ensure_default_desktop
+            ensure_default_desktop()
+        except Exception:
+            pass
         self.publish_commands()
         self.log("[remote] listening"
                  + ("" if self.chat_id else " - the first message will claim the bot"))
@@ -1687,6 +1692,11 @@ class Remote:
         message would go to a handle that no longer exists. So it is dropped,
         once, with a word about it.
         """
+        try:
+            from .target import ensure_default_desktop
+            ensure_default_desktop()
+        except Exception:
+            pass
         if self.chosen is None and self.remembered:
             self._find_remembered()
         if self.chosen is not None:

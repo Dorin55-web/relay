@@ -257,6 +257,9 @@ def recognised_windows():
     Returns [(hwnd, title, profile), ...] in the order Windows hands them
     over, which is roughly front to back.
     """
+    from .target import ensure_default_desktop
+    ensure_default_desktop()
+
     import ctypes
     import ctypes.wintypes as wt
 

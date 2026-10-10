@@ -921,6 +921,9 @@ def main(argv=None):
         print("[!!] relay is already running; not starting a second copy")
         return 1
 
+    from .target import ensure_default_desktop
+
+    ensure_default_desktop()
     print(f"\n=== relay started {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
     set_app_id()
     VoicePrompt(config).run(show_ui=not args.no_ui)

@@ -390,6 +390,13 @@ class Keeper:
                      "Send /start, then send it again.")
 
     def run(self):
+        try:
+            import ctypes
+            ctypes.windll.user32.SetThreadDesktop(
+                ctypes.windll.user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            )
+        except Exception:
+            pass
         self.log("[keeper] watching")
         self.was_alive = self.alive()
         if not self.was_alive and self.startup_grace > 0 and self.watch_seconds > 0:

@@ -41,6 +41,20 @@ def _u32():
     return ctypes.windll.user32
 
 
+def ensure_default_desktop():
+    """Attach the calling thread to the interactive 'Default' desktop if on Windows."""
+    if os.name != "nt":
+        return False
+    try:
+        user32 = _u32()
+        hdesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+        if hdesk:
+            return bool(user32.SetThreadDesktop(hdesk))
+    except Exception:
+        pass
+    return False
+
+
 def window_title(hwnd):
     try:
         user32 = _u32()
@@ -247,6 +261,7 @@ def is_terminal_window(hwnd, profile=None) -> bool:
 
 def foreground_window():
     try:
+        ensure_default_desktop()
         return _u32().GetForegroundWindow()
     except Exception:
         return None
@@ -363,6 +378,7 @@ class TargetTracker:
         threading.Timer(self.settle_seconds, self._capture, args=((x, y),)).start()
 
     def start(self):
+        ensure_default_desktop()
         from pynput import mouse
 
         self._capture()  # so there is a target before the first click
