@@ -32,6 +32,7 @@ rather than the padded window.
 
 import ctypes
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -319,6 +320,9 @@ class Orb(QWidget):
         self._clock = 0.0
         # What is fading out behind the current look, if anything.
         self._leaving = None
+        self._pulse_total = 0
+        self._pulse_remaining = 0
+        self._pulse_color = None
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -617,6 +621,13 @@ class Orb(QWidget):
         self.state = state
         self._change_look(self._look_for(state))
 
+    def pulse(self, color="cyan", duration_ms=500):
+        """Trigger an animated glowing ring fading out over duration_ms. Safe from any thread."""
+        total_frames = max(1, int(duration_ms / FRAME_MS))
+        self._pulse_total = total_frames
+        self._pulse_remaining = total_frames
+        self._pulse_color = QColor(color) if isinstance(color, str) else color
+
     # --- looks ------------------------------------------------------------
 
     def _look_for(self, state):
@@ -677,6 +688,8 @@ class Orb(QWidget):
                 (look, clock + self._rate(look) * seconds, left)
                 if left > 0 else None
             )
+        if self._pulse_remaining > 0:
+            self._pulse_remaining -= 1
         self.update()
 
     def _check_moving(self):
@@ -753,6 +766,19 @@ class Orb(QWidget):
         else:
             paint_look(painter, left, top, self.orb_size, self._look,
                        self._clock)
+        if self._pulse_remaining > 0 and self._pulse_color is not None:
+            fraction = self._pulse_remaining / max(1, self._pulse_total)
+            progress = 1.0 - fraction
+            alpha = int(220 * math.sin(progress * math.pi))
+            if alpha > 0:
+                pen = QPen(QColor(self._pulse_color.red(),
+                                  self._pulse_color.green(),
+                                  self._pulse_color.blue(),
+                                  alpha), 2.5)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                radius = self.orb_size / 2 + 3.0 + progress * 4.0
+                painter.drawEllipse(QPointF(cx, cy), radius, radius)
         painter.end()
 
     def _paint_hit_area(self, painter, cx, cy):

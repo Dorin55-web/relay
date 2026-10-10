@@ -44,6 +44,7 @@ REACHED_ACROSS = {
                      "normalise_orb", "ORB_SLOTS", "SLOT_LABELS"],
     "relay.cuda_setup": ["enable_cuda_dlls", "cuda_device_count"],
     "relay.feedback": ["Feedback"],
+    "relay.inplace": ["InplaceTranslator", "save_clipboard", "restore_clipboard"],
     "relay.injector": ["paste_text", "save_clipboard", "restore_clipboard"],
     "relay.keeper": ["Keeper", "MUTEX_NAME", "KEEPER_MUTEX_NAME",
                      "relay_is_running", "another_keeper_running", "settings",

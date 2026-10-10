@@ -75,7 +75,13 @@ class Feedback:
             # nothing went wrong, you asked for this.
             _beep_async([(780, 60), (620, 60), (490, 90)])
 
+    def inplace_success(self):
+        """Discrete, high chime confirming in-place translation."""
+        if self.enabled:
+            _beep_async([(880, 40), (1320, 60)])
+
     def error(self, message):
         print(f"[!!] {message}\n")
         if self.enabled:
             _beep_async([(330, 180), (250, 220)])  # low buzz = failure
+

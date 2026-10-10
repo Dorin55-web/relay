@@ -100,6 +100,14 @@ class VoicePrompt:
         # The phone, when there is a token to use. None otherwise, and
         # nothing about it is imported or started.
         self.remote = None
+        from .inplace import InplaceTranslator
+
+        self.inplace_translator = InplaceTranslator(
+            self.config,
+            translator_getter=self._get_translator,
+            feedback=self.feedback,
+            orb_getter=lambda: self.orb,
+        )
 
     # --- hotkey handling -------------------------------------------------
 
@@ -237,6 +245,10 @@ class VoicePrompt:
                         # the first phrase has somewhere to land.
                         self.tracker.restore()
                         self.tracker.restore_caret()
+            if self.inplace_translator.detect_and_translate():
+                if self.orb:
+                    self.orb.set_state(IDLE)
+                return
             if self.streaming:
                 # Snapshot once for the whole session; phrases paste repeatedly.
                 self._session_clipboard = save_clipboard(self.config)
@@ -626,6 +638,14 @@ class VoicePrompt:
 
         return shot.capture_on(self.orb, hwnd)
 
+    def _get_translator(self):
+        with self._translator_lock:
+            if self.text_translator is None:
+                from .translator import TextTranslator
+
+                self.text_translator = TextTranslator(self.config)
+        return self.text_translator
+
     def _to_english(self, text):
         """Romanian in, English out, for a prompt arriving from the phone.
 
@@ -634,12 +654,7 @@ class VoicePrompt:
         need it in memory at all. Under a lock, since the phone and the write
         window can both be the first to ask.
         """
-        with self._translator_lock:
-            if self.text_translator is None:
-                from .translator import TextTranslator
-
-                self.text_translator = TextTranslator(self.config)
-        return self.text_translator.translate(text)
+        return self._get_translator().translate(text)
 
     def _start_remote(self):
         """Start the phone side, if a token has been put in telegram.json.
