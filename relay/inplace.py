@@ -33,6 +33,7 @@ class InplaceTranslator:
         clipboard=None,
         target_getter: Optional[Callable[[], Any]] = None,
         uia_reader: Optional[Callable[..., Optional[str]]] = None,
+        uia_setter: Optional[Callable[..., bool]] = None,
     ):
         self.config = config
         self.translator_getter = translator_getter
@@ -49,6 +50,15 @@ class InplaceTranslator:
                 self.uia_reader = read_active_input_text
             except Exception:
                 self.uia_reader = None
+
+        if uia_setter is not None:
+            self.uia_setter = uia_setter
+        else:
+            try:
+                from .uia import set_active_input_text
+                self.uia_setter = set_active_input_text
+            except Exception:
+                self.uia_setter = None
 
     def _save(self):
         """Capture original clipboard content."""
@@ -141,35 +151,49 @@ class InplaceTranslator:
                 print(f"[inplace] translation error: {exc}")
                 return False
 
+            if english is None:
+                print("[inplace] translator returned None")
+                return False
+
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             print(f"[inplace] translated {len(uia_text)} chars ro -> en in {elapsed_ms:.0f}ms (silent UIA)")
 
-            # Save user clipboard before staging translation
-            original = self._save()
-            try:
-                self._clipboard.copy(english)
-                paste_delay = getattr(self.config, "paste_delay_ms", 10) if self.config else 10
-                if paste_delay > 0:
-                    time.sleep(paste_delay / 1000.0)
+            # Clean replacement without blue highlight:
+            # First attempt direct UIA insertion (ValuePattern.SetValue)
+            replaced = False
+            if self.uia_setter is not None:
+                try:
+                    replaced = bool(self.uia_setter(english))
+                except Exception as exc:
+                    print(f"[inplace] uia_setter error: {exc}")
+                    replaced = False
 
-                # Atomic replacement in-place:
-                # Ctrl+A then Ctrl+V back-to-back in ~5ms.
-                # Because English is already on clipboard, selection is overwritten
-                # in milliseconds before the display compositor renders a lingering blue selection state.
-                with self._keyboard.pressed(Key.ctrl):
-                    self._keyboard.press("a")
-                    self._keyboard.release("a")
-                    time.sleep(0.005)
-                    self._keyboard.press("v")
-                    self._keyboard.release("v")
+            if not replaced:
+                # Fallback: rapid atomic replacement without delay between Ctrl+A and Ctrl+V
+                original = self._save()
+                try:
+                    self._clipboard.copy(english)
+                    paste_delay = getattr(self.config, "paste_delay_ms", 10) if self.config else 10
+                    if paste_delay > 0:
+                        time.sleep(paste_delay / 1000.0)
 
-                self._restore(original, delay=True)
-                self._notify_success()
-                return True
-            except Exception as exc:
-                print(f"[inplace] error during paste: {exc}")
-                self._restore(original, delay=False)
-                return False
+                    # Atomic replacement in-place:
+                    # Press Ctrl+A and Ctrl+V back-to-back with no delay so the compositor
+                    # does not display an intermediate blue selection state.
+                    with self._keyboard.pressed(Key.ctrl):
+                        self._keyboard.press("a")
+                        self._keyboard.release("a")
+                        self._keyboard.press("v")
+                        self._keyboard.release("v")
+
+                    self._restore(original, delay=True)
+                except Exception as exc:
+                    print(f"[inplace] error during paste: {exc}")
+                    self._restore(original, delay=False)
+                    return False
+
+            self._notify_success()
+            return True
 
         # 2. Fallback: Clipboard Sentinel if UIA is unavailable in this control
         return self._detect_and_translate_sentinel()
@@ -242,6 +266,11 @@ class InplaceTranslator:
                 return False
 
             english = translator.translate(copied)
+            if english is None:
+                print("[inplace] translator returned None")
+                self._restore(original, delay=False)
+                return False
+
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             print(f"[inplace] translated {len(copied)} chars ro -> en in {elapsed_ms:.0f}ms (sentinel)")
 
@@ -252,11 +281,10 @@ class InplaceTranslator:
             if paste_delay > 0:
                 time.sleep(paste_delay / 1000.0)
 
-            # Replace selected text via Ctrl+A + Ctrl+V
+            # Replace selected text via Ctrl+A + Ctrl+V back-to-back with zero delay
             with self._keyboard.pressed(Key.ctrl):
                 self._keyboard.press("a")
                 self._keyboard.release("a")
-                time.sleep(0.005)
                 self._keyboard.press("v")
                 self._keyboard.release("v")
 

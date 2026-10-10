@@ -38,6 +38,7 @@ IDS = {
     "UIA_ControlTypePropertyId": 30003,
     "UIA_ButtonControlTypeId": 50000,
     "UIA_EditControlTypeId": 50004,
+    "UIA_DocumentControlTypeId": 50030,
     "UIA_InvokePatternId": 10000,
     "TreeScope_Descendants": 4,
 }
@@ -159,10 +160,30 @@ def _uia():
     return _local.auto, _local.uia
 
 
+NON_INPUT_CONTROL_TYPES = {
+    50000,  # Button
+    50002,  # CheckBox
+    50005,  # Hyperlink
+    50006,  # Image
+    50011,  # MenuItem
+    50012,  # ProgressBar
+    50013,  # RadioButton
+    50014,  # ScrollBar
+    50015,  # Slider
+    50019,  # TabItem
+    50021,  # ToolBar
+    50022,  # ToolTip
+    50038,  # Separator
+}
+
+
 def _looks_like_input(element, window_bounds):
     """Reject the page root and big regions; keep things the size of a textbox."""
     try:
         if not element.CurrentIsKeyboardFocusable:
+            return False
+        ct = getattr(element, "CurrentControlType", None)
+        if ct in NON_INPUT_CONTROL_TYPES:
             return False
         rect = element.CurrentBoundingRectangle
         width = rect.right - rect.left
@@ -412,9 +433,12 @@ def click_cancel_button(hwnd, candidate_names=None):
 
 
 def read_active_input_text(hwnd=None, name=None):
-    """Read text from active or named input element via UIA without keyboard selection.
+    """Read text from active input element via UIA without keyboard selection.
 
-    Returns the string if successfully read, or None if UIA could not extract text.
+    Strictly queries the currently focused input element (auto.GetFocusedElement()).
+    Does not scan the window or other Edit controls to prevent picking up
+    stale text or code from conversation history.
+    Returns the string if present, or "" if empty/deleted/not an input, or None if UIA unavailable.
     """
     auto, UIA = _uia()
     if auto is None:
@@ -443,9 +467,12 @@ def read_active_input_text(hwnd=None, name=None):
                     return str(txt)
         except Exception:
             pass
-        # 3. Win32 NativeWindowHandle for standard Edit controls
+        # 3. Win32 NativeWindowHandle for standard Edit and Document controls
         try:
-            if el.CurrentControlType == _id(UIA, "UIA_EditControlTypeId"):
+            if el.CurrentControlType in (
+                _id(UIA, "UIA_EditControlTypeId"),
+                _id(UIA, "UIA_DocumentControlTypeId"),
+            ):
                 h = el.CurrentNativeWindowHandle
                 if h:
                     import ctypes
@@ -461,40 +488,167 @@ def read_active_input_text(hwnd=None, name=None):
             pass
         return None
 
-    # 1. Try focused element first, but only if it looks like an input control
     try:
         focused = auto.GetFocusedElement()
-        if focused and (_looks_like_input(focused, None) or focused.CurrentControlType == _id(UIA, "UIA_EditControlTypeId")):
-            text = _extract_from(focused)
-            if text is not None:
-                return text
-    except Exception:
-        pass
+        if not focused:
+            return None
 
-    # 2. Try searching by name in target hwnd
-    if hwnd:
+        has_vp = False
+        is_readonly = False
         try:
-            root = auto.ElementFromHandle(hwnd)
-            if name:
-                cond = auto.CreatePropertyCondition(_id(UIA, "UIA_NamePropertyId"), name)
-                matches = root.FindAll(_id(UIA, "TreeScope_Descendants"), cond)
-                for i in range(matches.Length if matches else 0):
-                    text = _extract_from(matches.GetElement(i))
-                    if text is not None:
-                        return text
-            # Fallback: search Edit controls in target hwnd
-            cond_edit = auto.CreatePropertyCondition(
-                _id(UIA, "UIA_ControlTypePropertyId"),
-                _id(UIA, "UIA_EditControlTypeId")
-            )
-            edits = root.FindAll(_id(UIA, "TreeScope_Descendants"), cond_edit)
-            for i in range(edits.Length if edits else 0):
-                text = _extract_from(edits.GetElement(i))
-                if text is not None and text.strip():
-                    return text
+            vp = focused.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
+            if vp:
+                has_vp = True
+                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
+                if getattr(v_obj, "CurrentIsReadOnly", False):
+                    is_readonly = True
         except Exception:
             pass
 
-    return None
+        has_hwnd = False
+        try:
+            h = getattr(focused, "CurrentNativeWindowHandle", 0)
+            if h:
+                has_hwnd = True
+                import ctypes
+                style = ctypes.windll.user32.GetWindowLongW(h, -16)  # GWL_STYLE
+                if style & 0x0800:  # ES_READONLY
+                    is_readonly = True
+        except Exception:
+            pass
+
+        if is_readonly:
+            return ""
+
+        is_edit = False
+        try:
+            is_edit = focused.CurrentControlType == _id(UIA, "UIA_EditControlTypeId")
+        except Exception:
+            pass
+
+        is_doc = False
+        try:
+            is_doc = focused.CurrentControlType == _id(UIA, "UIA_DocumentControlTypeId")
+        except Exception:
+            pass
+
+        # Strictly check if the focused element is an input control.
+        # An Edit control or an element with ValuePattern is always an input.
+        # A Document control is an input if it has ValuePattern, a native HWND (e.g. RichEdit/Notepad),
+        # or bounds that fit an input box rather than the entire page root.
+        is_input = (
+            is_edit
+            or has_vp
+            or (is_doc and has_hwnd)
+            or _looks_like_input(focused, None)
+        )
+        if not is_input:
+            if is_doc or is_readonly:
+                return ""
+            return None
+
+        text = _extract_from(focused)
+        if text is None:
+            return ""
+
+        cleaned = text.replace("￼", "").replace("\u200b", "").strip()
+        if not cleaned:
+            return ""
+        return text
+    except Exception:
+        return None
+
+
+def set_active_input_text(text: str) -> bool:
+    """Set text of the active focused input element via UIA without keyboard selection.
+
+    Returns True if successfully set via ValuePattern or Win32 edit control, False otherwise.
+    """
+    auto, UIA = _uia()
+    if auto is None:
+        return False
+    try:
+        focused = auto.GetFocusedElement()
+        if not focused:
+            return False
+
+        has_vp = False
+        is_readonly = False
+        try:
+            vp = focused.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
+            if vp:
+                has_vp = True
+                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
+                if getattr(v_obj, "CurrentIsReadOnly", False):
+                    is_readonly = True
+        except Exception:
+            pass
+
+        has_hwnd = False
+        try:
+            h = getattr(focused, "CurrentNativeWindowHandle", 0)
+            if h:
+                has_hwnd = True
+                import ctypes
+                style = ctypes.windll.user32.GetWindowLongW(h, -16)  # GWL_STYLE
+                if style & 0x0800:  # ES_READONLY
+                    is_readonly = True
+        except Exception:
+            pass
+
+        if is_readonly:
+            return False
+
+        is_edit = False
+        try:
+            is_edit = focused.CurrentControlType == _id(UIA, "UIA_EditControlTypeId")
+        except Exception:
+            pass
+
+        is_doc = False
+        try:
+            is_doc = focused.CurrentControlType == _id(UIA, "UIA_DocumentControlTypeId")
+        except Exception:
+            pass
+
+        # Only set if it looks like an input or edit control
+        is_input = (
+            is_edit
+            or has_vp
+            or (is_doc and has_hwnd)
+            or _looks_like_input(focused, None)
+        )
+        if not is_input:
+            return False
+
+        # 1. ValuePattern
+        try:
+            vp = focused.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
+            if vp:
+                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
+                if not getattr(v_obj, "CurrentIsReadOnly", False):
+                    v_obj.SetValue(text)
+                    return True
+        except Exception:
+            pass
+
+        # 2. Win32 NativeWindowHandle
+        try:
+            if focused.CurrentControlType in (
+                _id(UIA, "UIA_EditControlTypeId"),
+                _id(UIA, "UIA_DocumentControlTypeId"),
+            ):
+                h = focused.CurrentNativeWindowHandle
+                if h:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    user32.SendMessageW(h, 0x000C, 0, text)  # WM_SETTEXT
+                    return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return False
 
 

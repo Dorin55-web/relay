@@ -362,4 +362,359 @@ res_empty = it_empty.detect_and_translate()
 check("silent UIA empty box reports False", res_empty is False)
 check("zero keystrokes simulated on empty box", len(kb_empty.keys) == 0)
 
+print("\n--- 12. Cleared / deleted box in active input (zero keystrokes, no stale history) ---")
+clip_del = MockClipboard(holding="unrelated clip")
+kb_del = MockKeyboard(clipboard=clip_del)
+trans_del = MockTranslator(prefix="TRANSLATED: ")
+orb_del = MockOrb()
+fb_del = MockFeedback()
+
+it_del = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_del,
+    feedback=fb_del,
+    orb_getter=lambda: orb_del,
+    keyboard=kb_del,
+    clipboard=clip_del,
+    uia_reader=lambda h, n: "",  # User cleared the text
+)
+
+res_del = it_del.detect_and_translate()
+check("deleted box returns False immediately", res_del is False)
+check("zero keystrokes on deleted box", len(kb_del.keys) == 0)
+check("translator not called on deleted box", trans_del.calls == [])
+check("orb did not pulse on deleted box", orb_del.pulses == [])
+check("feedback chime not triggered on deleted box", fb_del.success_count == 0)
+check("clipboard intact on deleted box", clip_del.value == "unrelated clip")
+
+print("\n--- 13. read_active_input_text strictly isolates focused element without window scan ---")
+from relay import uia
+
+class MockUIAElement:
+    def __init__(self, text="", control_type=50004, is_input=True):
+        self.CurrentControlType = control_type
+        self.CurrentIsKeyboardFocusable = is_input
+        self.text = text
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 200, "bottom": 50})()
+
+    def GetCurrentPattern(self, pattern_id):
+        # Emulate ValuePattern if text is set
+        elem = self
+        class MockVP:
+            CurrentValue = elem.text
+            CurrentIsReadOnly = False
+            def QueryInterface(self, _):
+                return self
+        return MockVP()
+
+class MockUIAAutomation:
+    def __init__(self, focused_element=None):
+        self.focused = focused_element
+        self.element_from_handle_called = False
+
+    def GetFocusedElement(self):
+        return self.focused
+
+    def ElementFromHandle(self, hwnd):
+        self.element_from_handle_called = True
+        raise AssertionError("ElementFromHandle should NEVER be called by read_active_input_text!")
+
+# Test 13A: Focused element has text
+mock_auto_with_text = MockUIAAutomation(MockUIAElement(text="salutare"))
+orig_auto, orig_UIA = uia._uia()
+uia._uia = lambda: (mock_auto_with_text, orig_UIA)
+try:
+    txt = uia.read_active_input_text(hwnd=12345)
+    check("read_active_input_text returns focused text", txt == "salutare")
+    check("ElementFromHandle was NOT called (no window tree scan)", not mock_auto_with_text.element_from_handle_called)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+# Test 13B: Focused element is empty / cleared
+mock_auto_empty = MockUIAAutomation(MockUIAElement(text=""))
+uia._uia = lambda: (mock_auto_empty, orig_UIA)
+try:
+    txt_empty = uia.read_active_input_text(hwnd=12345)
+    check("read_active_input_text returns empty string for empty focused control", txt_empty == "")
+    check("ElementFromHandle was NOT called for empty control", not mock_auto_empty.element_from_handle_called)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+# Test 13C: Focused element has only whitespace / replacement char
+mock_auto_ws = MockUIAAutomation(MockUIAElement(text="￼  \n  "))
+uia._uia = lambda: (mock_auto_ws, orig_UIA)
+try:
+    txt_ws = uia.read_active_input_text(hwnd=12345)
+    check("read_active_input_text returns empty string for whitespace/replacement char", txt_ws == "")
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 14. Clean insertion via uia_setter without blue highlight (zero Ctrl+A) ---")
+clip_clean = MockClipboard(holding="clean clip intact")
+kb_clean = MockKeyboard(clipboard=clip_clean)
+trans_clean = MockTranslator(prefix="CLEAN_ENG: ")
+orb_clean = MockOrb()
+fb_clean = MockFeedback()
+setter_writes = []
+
+def mock_setter(val):
+    setter_writes.append(val)
+    return True
+
+it_clean = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_clean,
+    feedback=fb_clean,
+    orb_getter=lambda: orb_clean,
+    keyboard=kb_clean,
+    clipboard=clip_clean,
+    uia_reader=lambda h, n: "traduce curat",
+    uia_setter=mock_setter,
+)
+
+res_clean = it_clean.detect_and_translate()
+check("clean insertion reported success", res_clean is True)
+check("uia_setter received translated text", setter_writes == ["CLEAN_ENG: traduce curat"])
+check("Ctrl+A was NOT simulated (zero blue highlight)", not any("press a" in k for k in kb_clean.keys))
+check("Ctrl+V was NOT simulated", not any("press v" in k for k in kb_clean.keys))
+check("zero keystrokes emitted", len(kb_clean.keys) == 0)
+check("user clipboard completely untouched", clip_clean.value == "clean clip intact")
+check("orb pulsed cyan", orb_clean.pulses == [("cyan", 500)])
+check("audio chime triggered", fb_clean.success_count == 1)
+
+print("\n--- 15. VoicePrompt toggle on empty/deleted box starts dictation cleanly ---")
+vp_del = app.VoicePrompt(cfg)
+vp_del._ready.set()
+vp_del.recorder = MockRecorder()
+vp_del.orb = MockOrb()
+vp_del.inplace_translator.detect_and_translate = lambda: False
+vp_del.state = app.IDLE
+
+vp_del.toggle()
+check("recorder.start() called on empty box", vp_del.recorder.started == 1)
+check("state is RECORDING", vp_del.state == app.RECORDING)
+check("orb is RECORDING", vp_del.orb.state == app.RECORDING)
+check("orb did not pulse cyan", vp_del.orb.pulses == [])
+
+print("\n--- 16. Multiline / tall input with ValuePattern (height > MAX_INPUT_HEIGHT) ---")
+class MockTallUIAElement:
+    def __init__(self, text="tall input text", has_vp=True):
+        self.CurrentControlType = 50025  # Custom control type (not standard Edit/Document)
+        self.CurrentIsKeyboardFocusable = True
+        self.text = text
+        self.has_vp = has_vp
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 400, "bottom": 500})()  # height = 490 > 300
+
+    def GetCurrentPattern(self, pattern_id):
+        if not self.has_vp:
+            return None
+        elem = self
+        class MockVP:
+            CurrentValue = elem.text
+            CurrentIsReadOnly = False
+            def QueryInterface(self, _):
+                return self
+            def SetValue(self, val):
+                elem.text = val
+        return MockVP()
+
+mock_tall = MockTallUIAElement(text="salutare din căsuță înaltă")
+mock_tall_auto = MockUIAAutomation(mock_tall)
+uia._uia = lambda: (mock_tall_auto, orig_UIA)
+try:
+    tall_text = uia.read_active_input_text()
+    check("read_active_input_text reads tall element with ValuePattern", tall_text == "salutare din căsuță înaltă")
+    tall_set_ok = uia.set_active_input_text("english in tall input")
+    check("set_active_input_text sets tall element with ValuePattern", tall_set_ok is True)
+    check("tall element text was updated", mock_tall.text == "english in tall input")
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 17. UIA translator returning None safely returns False ---")
+clip_none = MockClipboard(holding="orig clip none")
+kb_none = MockKeyboard(clipboard=clip_none)
+trans_none = MockTranslator()
+trans_none.translate = lambda text: None  # Translator returns None
+
+it_none = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_none,
+    keyboard=kb_none,
+    clipboard=clip_none,
+    uia_reader=lambda h, n: "romanian text here",
+)
+res_none = it_none.detect_and_translate()
+check("translator returning None returns False", res_none is False)
+check("zero keystrokes on None translation", len(kb_none.keys) == 0)
+check("user clipboard untouched when translation returns None", clip_none.value == "orig clip none")
+
+print("\n--- 18. Non-input focused element (e.g. Button) rejected by read/set ---")
+class MockButtonElement:
+    def __init__(self):
+        self.CurrentControlType = 50000  # Button
+        self.CurrentIsKeyboardFocusable = True  # Real buttons are keyboard focusable
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 0, "top": 0, "right": 50, "bottom": 20})()
+    def GetCurrentPattern(self, _):
+        return None
+
+mock_btn_auto = MockUIAAutomation(MockButtonElement())
+uia._uia = lambda: (mock_btn_auto, orig_UIA)
+try:
+    btn_read = uia.read_active_input_text()
+    check("read_active_input_text returns None for Button", btn_read is None)
+    btn_set = uia.set_active_input_text("cannot set button")
+    check("set_active_input_text returns False for Button", btn_set is False)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 19. Win32 Document control with NativeWindowHandle sets text via WM_SETTEXT ---")
+class MockWin32DocElement:
+    def __init__(self, hwnd=9999):
+        self.CurrentControlType = 50030  # UIA_DocumentControlTypeId
+        self.CurrentIsKeyboardFocusable = True
+        self.CurrentNativeWindowHandle = hwnd
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 200, "bottom": 50})()
+    def GetCurrentPattern(self, _):
+        return None  # No ValuePattern
+
+mock_doc = MockWin32DocElement()
+mock_doc_auto = MockUIAAutomation(mock_doc)
+sent_messages = []
+import ctypes
+orig_send_message = getattr(ctypes.windll.user32, "SendMessageW", None)
+
+def mock_send_message(hwnd, msg, wparam, lparam):
+    sent_messages.append((hwnd, msg, wparam, lparam))
+    return 1
+
+ctypes.windll.user32.SendMessageW = mock_send_message
+uia._uia = lambda: (mock_doc_auto, orig_UIA)
+try:
+    doc_set_ok = uia.set_active_input_text("WM_SETTEXT into document")
+    check("set_active_input_text succeeds on Document control via WM_SETTEXT", doc_set_ok is True)
+    check("SendMessageW received WM_SETTEXT (0x000C)", any(m[1] == 0x000C for m in sent_messages))
+finally:
+    ctypes.windll.user32.SendMessageW = orig_send_message
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 20. Webpage document root (DocumentControlTypeId, height > 300, no HWND) rejected ---")
+class MockWebDocElement:
+    def __init__(self):
+        self.CurrentControlType = 50030  # UIA_DocumentControlTypeId
+        self.CurrentIsKeyboardFocusable = True
+        self.CurrentNativeWindowHandle = 0  # No native HWND
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 0, "top": 0, "right": 1920, "bottom": 1080})()  # Full screen page root
+        self.text = "Entire webpage text with 50,000 words..."
+
+    def GetCurrentPattern(self, pattern_id):
+        # Implements TextPattern (like a real web page root), but NOT ValuePattern
+        if pattern_id == uia._id(orig_UIA, "UIA_TextPatternId"):
+            elem = self
+            class MockTP:
+                class DocumentRange:
+                    @staticmethod
+                    def GetText(_):
+                        return elem.text
+                def QueryInterface(self, _):
+                    return self
+            return MockTP()
+        return None
+
+mock_webdoc = MockWebDocElement()
+mock_webdoc_auto = MockUIAAutomation(mock_webdoc)
+uia._uia = lambda: (mock_webdoc_auto, orig_UIA)
+try:
+    webdoc_read = uia.read_active_input_text()
+    check("read_active_input_text rejects webpage document root (returns empty string)", webdoc_read == "")
+    webdoc_set = uia.set_active_input_text("cannot set webpage root")
+    check("set_active_input_text rejects webpage document root (returns False)", webdoc_set is False)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 21. Sentinel mode translator returning None safely returns False ---")
+clip_sentinel_none = MockClipboard(holding="orig sentinel clip")
+kb_sentinel_none = MockKeyboard(clipboard=clip_sentinel_none, target_text="salut romanesc")
+trans_sentinel_none = MockTranslator()
+trans_sentinel_none.translate = lambda text: None  # Returns None
+
+it_sentinel_none = InplaceTranslator(
+    config=config,
+    translator_getter=lambda: trans_sentinel_none,
+    keyboard=kb_sentinel_none,
+    clipboard=clip_sentinel_none,
+    uia_reader=None,
+)
+res_sentinel_none = it_sentinel_none.detect_and_translate()
+check("sentinel translator returning None returns False", res_sentinel_none is False)
+check("sentinel original clipboard restored intact", clip_sentinel_none.value == "orig sentinel clip")
+check("Ctrl+V was NOT simulated when translation returns None", "press v" not in kb_sentinel_none.keys)
+
+print("\n--- 22. InplaceTranslator on WebDoc / Non-input falls back to dictation without Sentinel ---")
+mock_webdoc_auto2 = MockUIAAutomation(MockWebDocElement())
+uia._uia = lambda: (mock_webdoc_auto2, orig_UIA)
+try:
+    clip_doc = MockClipboard(holding="orig user clip")
+    kb_doc = MockKeyboard(clipboard=clip_doc, target_text="Webpage text copied on Ctrl+C")
+    trans_doc = MockTranslator()
+    it_doc = InplaceTranslator(
+        config=cfg_uia,
+        translator_getter=lambda: trans_doc,
+        keyboard=kb_doc,
+        clipboard=clip_doc,
+        uia_reader=uia.read_active_input_text,
+        uia_setter=uia.set_active_input_text,
+    )
+    res_doc = it_doc.detect_and_translate()
+    check("detect_and_translate on WebDoc returns False", res_doc is False)
+    check("zero keystrokes simulated (no Ctrl+A/Ctrl+C Sentinel bypass)", len(kb_doc.keys) == 0)
+    check("translator not called on WebDoc", len(trans_doc.calls) == 0)
+    check("user clipboard left completely untouched", clip_doc.value == "orig user clip")
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
+print("\n--- 23. Read-only Edit control rejected by read/set (zero keystrokes) ---")
+class MockReadOnlyEditElement:
+    def __init__(self, text="read only chat message"):
+        self.CurrentControlType = 50004  # Edit
+        self.CurrentIsKeyboardFocusable = True
+        self.text = text
+        self.CurrentBoundingRectangle = type("Rect", (), {"left": 10, "top": 10, "right": 200, "bottom": 50})()
+    def GetCurrentPattern(self, pattern_id):
+        elem = self
+        class MockVP:
+            CurrentValue = elem.text
+            CurrentIsReadOnly = True  # Read-only!
+            def QueryInterface(self, _):
+                return self
+            def SetValue(self, val):
+                raise RuntimeError("Cannot write to read-only control")
+        return MockVP()
+
+mock_ro = MockReadOnlyEditElement()
+mock_ro_auto = MockUIAAutomation(mock_ro)
+uia._uia = lambda: (mock_ro_auto, orig_UIA)
+try:
+    ro_read = uia.read_active_input_text()
+    check("read_active_input_text returns empty string for read-only control", ro_read == "")
+    ro_set = uia.set_active_input_text("cannot overwrite")
+    check("set_active_input_text returns False for read-only control", ro_set is False)
+
+    clip_ro = MockClipboard("ro clip")
+    kb_ro = MockKeyboard(clipboard=clip_ro, target_text="read only text")
+    trans_ro = MockTranslator()
+    it_ro = InplaceTranslator(
+        config=cfg_uia,
+        translator_getter=lambda: trans_ro,
+        keyboard=kb_ro,
+        clipboard=clip_ro,
+        uia_reader=uia.read_active_input_text,
+        uia_setter=uia.set_active_input_text,
+    )
+    res_ro = it_ro.detect_and_translate()
+    check("detect_and_translate on read-only control returns False", res_ro is False)
+    check("zero keystrokes on read-only control", len(kb_ro.keys) == 0)
+    check("translator not called on read-only control", len(trans_ro.calls) == 0)
+finally:
+    uia._uia = lambda: (orig_auto, orig_UIA)
+
 sys.exit(report.finish())
