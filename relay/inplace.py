@@ -1,9 +1,13 @@
 """In-place Romanian-to-English translation in the active window.
 
 Activated by F9 when the focused control already contains Romanian text.
-Uses a non-destructive clipboard sentinel to read the existing text,
-translates it locally via Opus-MT, replaces it via Ctrl+V, and restores
-the user's original clipboard. If the box is empty, falls back to voice dictation.
+1. Silent UIA mode (primary): Reads the text without any selection highlight,
+   translates on GPU in background, and replaces atomically via rapid Ctrl+A + Ctrl+V
+   in ~5ms so no blue selection highlight is ever displayed.
+2. Sentinel mode (fallback): If UIA is unavailable in the control, uses a clipboard
+   sentinel but deselects immediately with Right Arrow before translating, then
+   replaces atomically via rapid Ctrl+A + Ctrl+V.
+If the box is empty, falls back to voice dictation without visual disruption.
 """
 
 import time
@@ -27,6 +31,8 @@ class InplaceTranslator:
         orb_getter: Optional[Callable[[], Any]] = None,
         keyboard: Optional[Controller] = None,
         clipboard=None,
+        target_getter: Optional[Callable[[], Any]] = None,
+        uia_reader: Optional[Callable[..., Optional[str]]] = None,
     ):
         self.config = config
         self.translator_getter = translator_getter
@@ -34,6 +40,15 @@ class InplaceTranslator:
         self.orb_getter = orb_getter
         self._keyboard = keyboard if keyboard is not None else Controller()
         self._clipboard = clipboard if clipboard is not None else pyperclip
+        self.target_getter = target_getter
+        if uia_reader is not None:
+            self.uia_reader = uia_reader
+        else:
+            try:
+                from .uia import read_active_input_text
+                self.uia_reader = read_active_input_text
+            except Exception:
+                self.uia_reader = None
 
     def _save(self):
         """Capture original clipboard content."""
@@ -69,12 +84,97 @@ class InplaceTranslator:
             except Exception:
                 pass
 
+    def _notify_success(self):
+        if self.orb_getter:
+            try:
+                orb = self.orb_getter()
+                if orb is not None and hasattr(orb, "pulse"):
+                    orb.pulse(color="cyan", duration_ms=500)
+            except Exception as exc:
+                print(f"[inplace] orb pulse error: {exc}")
+
+        if self.feedback is not None and hasattr(self.feedback, "inplace_success"):
+            try:
+                self.feedback.inplace_success()
+            except Exception as exc:
+                print(f"[inplace] audio feedback error: {exc}")
+
     def detect_and_translate(self) -> bool:
-        """Inspects active box using sentinel protocol.
+        """Inspects active box and translates Romanian text to English in-place.
 
         Returns True if in-place translation succeeded (do not record audio).
         Returns False if box was empty or whitespace (fallback to voice dictation).
         """
+        target = self.target_getter() if callable(self.target_getter) else self.target_getter
+        hwnd = getattr(target, "hwnd", None)
+        input_name = getattr(target, "input_name", None)
+
+        # 1. Attempt silent UIA text extraction without keyboard selection
+        uia_text = None
+        if self.uia_reader is not None:
+            try:
+                uia_text = self.uia_reader(hwnd, input_name)
+            except Exception as exc:
+                print(f"[inplace] uia_reader error: {exc}")
+                uia_text = None
+
+        if uia_text is not None:
+            stripped = uia_text.strip()
+            if not stripped:
+                # Empty box: silent fallback to voice dictation without ANY keystrokes
+                return False
+
+            # Translate Romanian text while user screen stays completely normal
+            started = time.perf_counter()
+            translator = (
+                self.translator_getter()
+                if callable(self.translator_getter)
+                else self.translator_getter
+            )
+            if translator is None:
+                print("[inplace] no translator available")
+                return False
+
+            try:
+                english = translator.translate(uia_text)
+            except Exception as exc:
+                print(f"[inplace] translation error: {exc}")
+                return False
+
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            print(f"[inplace] translated {len(uia_text)} chars ro -> en in {elapsed_ms:.0f}ms (silent UIA)")
+
+            # Save user clipboard before staging translation
+            original = self._save()
+            try:
+                self._clipboard.copy(english)
+                paste_delay = getattr(self.config, "paste_delay_ms", 10) if self.config else 10
+                if paste_delay > 0:
+                    time.sleep(paste_delay / 1000.0)
+
+                # Atomic replacement in-place:
+                # Ctrl+A then Ctrl+V back-to-back in ~5ms.
+                # Because English is already on clipboard, selection is overwritten
+                # in milliseconds before the display compositor renders a lingering blue selection state.
+                with self._keyboard.pressed(Key.ctrl):
+                    self._keyboard.press("a")
+                    self._keyboard.release("a")
+                    time.sleep(0.005)
+                    self._keyboard.press("v")
+                    self._keyboard.release("v")
+
+                self._restore(original, delay=True)
+                self._notify_success()
+                return True
+            except Exception as exc:
+                print(f"[inplace] error during paste: {exc}")
+                self._restore(original, delay=False)
+                return False
+
+        # 2. Fallback: Clipboard Sentinel if UIA is unavailable in this control
+        return self._detect_and_translate_sentinel()
+
+    def _detect_and_translate_sentinel(self) -> bool:
         original = self._save()
         sentinel = f"__RELAY_SENTINEL_{uuid.uuid4().hex}__"
 
@@ -114,7 +214,19 @@ class InplaceTranslator:
             if copied == sentinel or not copied or not copied.strip():
                 # Empty box or nothing selected; restore clipboard and fallback
                 self._restore(original, delay=False)
+                try:
+                    self._keyboard.press(Key.right)
+                    self._keyboard.release(Key.right)
+                except Exception:
+                    pass
                 return False
+
+            # IMMEDIATELY deselect so blue highlight does NOT linger during translation!
+            try:
+                self._keyboard.press(Key.right)
+                self._keyboard.release(Key.right)
+            except Exception:
+                pass
 
             # Translate Romanian text
             started = time.perf_counter()
@@ -131,43 +243,31 @@ class InplaceTranslator:
 
             english = translator.translate(copied)
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            print(f"[inplace] translated {len(copied)} chars ro -> en in {elapsed_ms:.0f}ms")
+            print(f"[inplace] translated {len(copied)} chars ro -> en in {elapsed_ms:.0f}ms (sentinel)")
 
             # Copy translated English text to clipboard
             self._clipboard.copy(english)
 
-            paste_delay = getattr(self.config, "paste_delay_ms", 15) if self.config else 15
+            paste_delay = getattr(self.config, "paste_delay_ms", 10) if self.config else 10
             if paste_delay > 0:
                 time.sleep(paste_delay / 1000.0)
 
-            # Replace selected text via Ctrl+V (selection is still active)
-            # DO NOT send Enter (user reviews before submitting)
+            # Replace selected text via Ctrl+A + Ctrl+V
             with self._keyboard.pressed(Key.ctrl):
+                self._keyboard.press("a")
+                self._keyboard.release("a")
+                time.sleep(0.005)
                 self._keyboard.press("v")
                 self._keyboard.release("v")
 
             # Restore original clipboard after short delay
             self._restore(original, delay=True)
 
-            # Visual and audio confirmation
-            if self.orb_getter:
-                try:
-                    orb = self.orb_getter()
-                    if orb is not None and hasattr(orb, "pulse"):
-                        orb.pulse(color="cyan", duration_ms=500)
-                except Exception as exc:
-                    print(f"[inplace] orb pulse error: {exc}")
-
-            if self.feedback is not None and hasattr(self.feedback, "inplace_success"):
-                try:
-                    self.feedback.inplace_success()
-                except Exception as exc:
-                    print(f"[inplace] audio feedback error: {exc}")
-
+            self._notify_success()
             return True
 
         except Exception as exc:
-            print(f"[inplace] error during detect_and_translate: {exc}")
+            print(f"[inplace] error during sentinel translation: {exc}")
             self._restore(original, delay=False)
             return False
 

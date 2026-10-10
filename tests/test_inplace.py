@@ -318,4 +318,48 @@ print("\n--- 9. Orb pulse method check ---")
 from relay.overlay import Orb
 check("Orb has pulse method", hasattr(Orb, "pulse") and callable(Orb.pulse))
 
+print("\n--- 10. Silent UIA mode (zero copy keystrokes) ---")
+cfg_uia = Config()
+clip_uia = MockClipboard(holding="important user clip")
+kb_uia = MockKeyboard(clipboard=clip_uia)
+trans_uia = MockTranslator(prefix="UIA_ENG: ")
+orb_uia = MockOrb()
+fb_uia = MockFeedback()
+
+it_uia = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_uia,
+    feedback=fb_uia,
+    orb_getter=lambda: orb_uia,
+    keyboard=kb_uia,
+    clipboard=clip_uia,
+    uia_reader=lambda h, n: "scrie cod python curat",
+)
+
+res_uia = it_uia.detect_and_translate()
+check("silent UIA translation reported success", res_uia is True)
+check("translator received UIA text directly", trans_uia.calls == ["scrie cod python curat"])
+check("Ctrl+C was NOT simulated (silent read)", not any("press c" in k for k in kb_uia.keys))
+check("Ctrl+A was simulated for replacement", "press a" in kb_uia.keys)
+check("Ctrl+V was simulated for replacement", "press v" in kb_uia.keys)
+check("user clipboard restored intact", clip_uia.value == "important user clip")
+check("orb pulsed cyan", orb_uia.pulses == [("cyan", 500)])
+check("audio chime triggered", fb_uia.success_count == 1)
+
+print("\n--- 11. Silent UIA mode: empty box (zero keystrokes) ---")
+kb_empty = MockKeyboard(clipboard=clip_uia)
+it_empty = InplaceTranslator(
+    config=cfg_uia,
+    translator_getter=lambda: trans_uia,
+    feedback=fb_uia,
+    orb_getter=lambda: orb_uia,
+    keyboard=kb_empty,
+    clipboard=clip_uia,
+    uia_reader=lambda h, n: "   ",
+)
+
+res_empty = it_empty.detect_and_translate()
+check("silent UIA empty box reports False", res_empty is False)
+check("zero keystrokes simulated on empty box", len(kb_empty.keys) == 0)
+
 sys.exit(report.finish())

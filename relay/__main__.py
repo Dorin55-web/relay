@@ -107,6 +107,7 @@ class VoicePrompt:
             translator_getter=self._get_translator,
             feedback=self.feedback,
             orb_getter=lambda: self.orb,
+            target_getter=lambda: self.tracker,
         )
 
     # --- hotkey handling -------------------------------------------------

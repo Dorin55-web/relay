@@ -32,6 +32,8 @@ MAX_BUTTONS = 400
 IDS = {
     "UIA_TextPatternId": 10014,
     "UIA_IsTextPatternAvailablePropertyId": 30040,
+    "UIA_ValuePatternId": 10002,
+    "UIA_IsValuePatternAvailablePropertyId": 30043,
     "UIA_NamePropertyId": 30005,
     "UIA_ControlTypePropertyId": 30003,
     "UIA_ButtonControlTypeId": 50000,
@@ -407,4 +409,92 @@ def click_cancel_button(hwnd, candidate_names=None):
     except Exception as exc:
         print(f"[uia] click_cancel_button failed: {exc}")
     return False
+
+
+def read_active_input_text(hwnd=None, name=None):
+    """Read text from active or named input element via UIA without keyboard selection.
+
+    Returns the string if successfully read, or None if UIA could not extract text.
+    """
+    auto, UIA = _uia()
+    if auto is None:
+        return None
+
+    def _extract_from(el):
+        if not el:
+            return None
+        # 1. ValuePattern
+        try:
+            vp = el.GetCurrentPattern(_id(UIA, "UIA_ValuePatternId"))
+            if vp:
+                v_obj = vp.QueryInterface(UIA.IUIAutomationValuePattern)
+                val = v_obj.CurrentValue
+                if val is not None:
+                    return str(val)
+        except Exception:
+            pass
+        # 2. TextPattern
+        try:
+            tp = el.GetCurrentPattern(_id(UIA, "UIA_TextPatternId"))
+            if tp:
+                t_obj = tp.QueryInterface(UIA.IUIAutomationTextPattern)
+                txt = t_obj.DocumentRange.GetText(-1)
+                if txt is not None:
+                    return str(txt)
+        except Exception:
+            pass
+        # 3. Win32 NativeWindowHandle for standard Edit controls
+        try:
+            if el.CurrentControlType == _id(UIA, "UIA_EditControlTypeId"):
+                h = el.CurrentNativeWindowHandle
+                if h:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    length = user32.SendMessageW(h, 0x000E, 0, 0)
+                    if length > 0:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.SendMessageW(h, 0x000D, length + 1, buf)
+                        return buf.value
+                    elif length == 0:
+                        return ""
+        except Exception:
+            pass
+        return None
+
+    # 1. Try focused element first, but only if it looks like an input control
+    try:
+        focused = auto.GetFocusedElement()
+        if focused and (_looks_like_input(focused, None) or focused.CurrentControlType == _id(UIA, "UIA_EditControlTypeId")):
+            text = _extract_from(focused)
+            if text is not None:
+                return text
+    except Exception:
+        pass
+
+    # 2. Try searching by name in target hwnd
+    if hwnd:
+        try:
+            root = auto.ElementFromHandle(hwnd)
+            if name:
+                cond = auto.CreatePropertyCondition(_id(UIA, "UIA_NamePropertyId"), name)
+                matches = root.FindAll(_id(UIA, "TreeScope_Descendants"), cond)
+                for i in range(matches.Length if matches else 0):
+                    text = _extract_from(matches.GetElement(i))
+                    if text is not None:
+                        return text
+            # Fallback: search Edit controls in target hwnd
+            cond_edit = auto.CreatePropertyCondition(
+                _id(UIA, "UIA_ControlTypePropertyId"),
+                _id(UIA, "UIA_EditControlTypeId")
+            )
+            edits = root.FindAll(_id(UIA, "TreeScope_Descendants"), cond_edit)
+            for i in range(edits.Length if edits else 0):
+                text = _extract_from(edits.GetElement(i))
+                if text is not None and text.strip():
+                    return text
+        except Exception:
+            pass
+
+    return None
+
 
