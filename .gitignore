@@ -37,3 +37,4 @@ notes.json
 # Incoming photos downloaded for terminal injection
 inbox/
 .agents/
+scratch/
