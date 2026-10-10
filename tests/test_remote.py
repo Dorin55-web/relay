@@ -112,7 +112,7 @@ class Api:
 
 
 def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None,
-         downloader=None, speech_translator=None):
+         downloader=None, speech_translator=None, translate=None):
     tmp = Path(tempfile.mkdtemp(prefix="relay-remote-"))
     path = tmp / "telegram.json"
     path.write_text(json.dumps({"token": "t", "chat_id": chat_id}), encoding="utf-8")
@@ -132,6 +132,7 @@ def make(chat_id=MINE, states=None, sent=None, watched=True, canceller=None,
         canceller=canceller,
         downloader=downloader,
         speech_translator=speech_translator,
+        translate=translate,
     )
     bot.alive = alive
     bot.pilot.read_state = states or (lambda _h: agent.IDLE)
@@ -1011,5 +1012,120 @@ bot_stranger._handle(bot_stranger.api.updates.pop())
 check("stranger voice is ignored in silence",
       len(api_stranger.sent) == 0 and len(called_audio) == 0,
       f"sent: {api_stranger.sent}, called: {len(called_audio)}")
+
+print("\n--- Milestone 6: Special Mode Triggers (/team, /goal, /plan, text & voice) ---")
+# 1. detect_special_mode unit tests
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Teamwork: build a scraper")
+check("detect_special_mode matches English teamwork:",
+      mode == "teamwork" and cmd == "/teamwork-preview" and content == "build a scraper" and emoji == "👥")
+
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Echipă: construiește o aplicație")
+check("detect_special_mode matches Romanian Echipă:",
+      mode == "teamwork" and cmd == "/teamwork-preview" and content == "construiește o aplicație" and emoji == "👥")
+
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Goal: solve the riddle")
+check("detect_special_mode matches English goal:",
+      mode == "goal" and cmd == "/goal" and content == "solve the riddle" and emoji == "🎯")
+
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Obiectiv: finalizează modulul")
+check("detect_special_mode matches Romanian Obiectiv:",
+      mode == "goal" and cmd == "/goal" and content == "finalizează modulul" and emoji == "🎯")
+
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Plan: setup CI/CD")
+check("detect_special_mode matches English plan:",
+      mode == "plan" and cmd == "/plan" and content == "setup CI/CD" and emoji == "📋")
+
+mode, cmd, content, emoji = remote_mod.detect_special_mode("Just a normal prompt")
+check("detect_special_mode ignores normal prompt",
+      mode is None and cmd is None and content == "Just a normal prompt")
+
+# 2. Empty commands ask for prompt
+bot_cmd, api_cmd, _, _ = make()
+bot_cmd._handle({"update_id": 1, "message": {"chat": {"id": MINE}, "text": "/team"}})
+check("/team without prompt returns usage help",
+      any("Teamwork Mode" in s and "/team" in s for s in api_cmd.sent),
+      str(api_cmd.sent))
+check("/team without prompt queues nothing", len(bot_cmd.pending) == 0)
+
+api_cmd.sent.clear()
+bot_cmd._handle({"update_id": 2, "message": {"chat": {"id": MINE}, "text": "/goal"}})
+check("/goal without prompt returns usage help",
+      any("Goal Mode" in s and "/goal" in s for s in api_cmd.sent),
+      str(api_cmd.sent))
+
+api_cmd.sent.clear()
+bot_cmd._handle({"update_id": 3, "message": {"chat": {"id": MINE}, "text": "/plan"}})
+check("/plan without prompt returns usage help",
+      any("Plan Mode" in s and "/plan" in s for s in api_cmd.sent),
+      str(api_cmd.sent))
+
+# 3. Mode commands with prompts translate and queue properly
+mock_tr = lambda ro: "create a microservice" if "microserviciu" in ro else ro
+bot_modes, api_modes, _, _ = make(translate=mock_tr)
+
+# /team
+api_modes.sent.clear()
+bot_modes._handle({"update_id": 10, "message": {"chat": {"id": MINE}, "text": "/team creează un microserviciu"}})
+check("/team queues /teamwork-preview with translated prompt",
+      list(bot_modes.pending) == ["/teamwork-preview create a microservice"],
+      str(list(bot_modes.pending)))
+check("/team records display prompt with emoji",
+      "👥 /teamwork-preview create a microservice" in bot_modes._prompts,
+      str(bot_modes._prompts))
+check("/team confirms with dedicated message",
+      any("Queued (Teamwork Mode)" in s for s in api_modes.sent),
+      str(api_modes.sent))
+
+# /goal
+bot_modes.pending.clear()
+api_modes.sent.clear()
+bot_modes._handle({"update_id": 11, "message": {"chat": {"id": MINE}, "text": "/goal fix memory leak"}})
+check("/goal queues /goal with prompt",
+      list(bot_modes.pending) == ["/goal fix memory leak"],
+      str(list(bot_modes.pending)))
+check("/goal records display prompt with emoji",
+      "🎯 /goal fix memory leak" in bot_modes._prompts,
+      str(bot_modes._prompts))
+
+# /plan
+bot_modes.pending.clear()
+api_modes.sent.clear()
+bot_modes._handle({"update_id": 12, "message": {"chat": {"id": MINE}, "text": "/plan implement sqlite caching"}})
+check("/plan queues /plan with prompt",
+      list(bot_modes.pending) == ["/plan implement sqlite caching"],
+      str(list(bot_modes.pending)))
+check("/plan records display prompt with emoji",
+      "📋 /plan implement sqlite caching" in bot_modes._prompts,
+      str(bot_modes._prompts))
+
+# 4. Text messages with prefixes auto-detected
+bot_text, api_text, _, _ = make(translate=mock_tr)
+bot_text._handle({"update_id": 20, "message": {"chat": {"id": MINE}, "text": "Echipă: creează un microserviciu"}})
+check("Romanian text with 'Echipă:' triggers teamwork mode",
+      list(bot_text.pending) == ["/teamwork-preview create a microservice"],
+      str(list(bot_text.pending)))
+check("Romanian text records display prompt with 👥",
+      "👥 /teamwork-preview create a microservice" in bot_text._prompts,
+      str(bot_text._prompts))
+
+# 5. Voice messages with prefixes auto-detected
+def mock_team_speech(_audio):
+    return "Teamwork: refactor the authentication module"
+
+bot_vmode, api_vmode, _, _ = make(
+    downloader=lambda _token, _path: dummy_wave,
+    speech_translator=mock_team_speech,
+)
+bot_vmode.api.feed_voice(file_id="voice_team", chat=MINE)
+bot_vmode._handle(bot_vmode.api.updates.pop())
+check("Voice note with 'Teamwork:' prefix triggers teamwork mode",
+      list(bot_vmode.pending) == ["/teamwork-preview refactor the authentication module"],
+      str(list(bot_vmode.pending)))
+check("Voice note status message indicates Teamwork Mode",
+      any("Transcribed (Teamwork Mode)" in e for e in api_vmode.edits),
+      str(api_vmode.edits))
+check("Voice note display prompt contains 👥",
+      "👥 /teamwork-preview refactor the authentication module" in bot_vmode._prompts,
+      str(bot_vmode._prompts))
 
 sys.exit(report.finish())

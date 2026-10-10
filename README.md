@@ -246,6 +246,28 @@ resized, or reflowed.
 
 ---
 
+## Telegram Remote Control & Agent Modes
+
+Control your AI assistant remotely from your phone using Telegram:
+
+- **Voice Notes & Audio**: Send a voice message in Romanian; Relay decodes it locally via Whisper, translates it to English, and queues it for execution in the target window.
+- **Photos & Screenshots**: Send photos directly to your active agent.
+- **Task Management**: Real-time status cards with live updates, 3-second autopilot countdowns, and a `[🛑 Cancel Task]` button.
+
+### Special Agent Mode Triggers
+
+Launch advanced AntiGravity workflows directly from Telegram:
+
+| Mode | Slash Command | Voice / Text Prefixes | Description |
+|---|---|---|---|
+| **Teamwork** 👥 | `/team <prompt>`<br>`/teamwork <prompt>` | `Team:`, `Teamwork:`, `Echipă:`, `Echipa:` | Launches multi-agent orchestrator (`/teamwork-preview <task>`) with implementer, reviewer, and tester subagents. |
+| **Goal** 🎯 | `/goal <prompt>` | `Goal:`, `Objective:`, `Obiectiv:` | Autonomous long-running execution mode (`/goal <task>`). |
+| **Plan** 📋 | `/plan <prompt>` | `Plan:`, `Planning:`, `Planificare:` | Interactive step-by-step planning mode (`/plan <task>`). |
+
+You can either type the slash commands (e.g. `/team creează o suită de teste`), or simply speak a voice note starting with the trigger word (e.g. *"Echipă: implementează caching-ul"* or *"Goal: optimizează latența"*). Relay automatically detects the mode, strips the trigger, translates to English, and formats the slash command for AntiGravity.
+
+---
+
 ## Configuration
 
 Settings live in `config.json`, the right-click templates in `prompts.json`.
@@ -361,10 +383,12 @@ relay/
 ├── audio.py             capture, device tracking, VAD phrase segmentation
 ├── transcriber.py       Whisper loading, warm-up, translation
 ├── injector.py          clipboard save → set → Ctrl+V → restore
+├── inplace.py           in-place F9 text detection and replacement
 ├── prompts.py           the right-click template library, over prompts.json
 ├── prompt_editor.py     the window that edits it
 ├── translator.py        Romanian text to English text (Marian, not Whisper)
-├── compose.py           the window you type into
+├── remote.py            Telegram bot remote control, autopilot queue, and voice notes
+├── keeper.py            background watchdog & restarter for remote
 ├── target.py            remembers the window you last typed in
 ├── uia.py               finds and focuses the text box via UI Automation
 ├── overlay.py           the floating orb (PySide6)

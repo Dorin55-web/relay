@@ -77,6 +77,9 @@ CANCEL_KEYBOARD = {
 # answers, and that is the moment you most need to be told the command exists.
 COMMANDS = (
     ("status", "What it can see right now"),
+    ("team", "Run with teamwork subagents - /team <prompt>"),
+    ("goal", "Run long-running autonomous goal - /goal <prompt>"),
+    ("plan", "Create step-by-step plan - /plan <prompt>"),
     ("usage", "Quota and token activity"),
     ("notes", "Saved notes & ideas - /notes add <idea>"),
     ("more", "The whole of the last result, not just the card"),
@@ -328,6 +331,41 @@ TIMESTAMP_RE = re.compile(
     r"^(\d{1,2}:\d{2}(?::\d{2})?(\s*(am|pm))?|just now|today at \d{1,2}:\d{2})$",
     re.IGNORECASE,
 )
+
+MODE_TRIGGERS = (
+    ("teamwork", "/teamwork-preview", "👥", (
+        "teamwork:", "teamwork,", "teamwork -", "teamwork ",
+        "team:", "team,", "team -", "team ",
+        "echipă:", "echipa:", "echipă,", "echipa,", "echipă -", "echipa -", "echipă ", "echipa ",
+    )),
+    ("goal", "/goal", "🎯", (
+        "goal:", "goal,", "goal -", "goal ",
+        "objective:", "objective,", "objective -", "objective ",
+        "obiectiv:", "obiectiv,", "obiectiv -", "obiectiv ",
+    )),
+    ("plan", "/plan", "📋", (
+        "plan:", "plan,", "plan -", "plan ",
+        "planificare:", "planificare,", "planificare -", "planificare ",
+    )),
+)
+
+
+def detect_special_mode(text):
+    """Detect if text or transcribed voice starts with a special mode trigger.
+
+    Returns (mode_name, command_prefix, clean_content, emoji) or (None, None, text, None).
+    """
+    if not text:
+        return None, None, text, None
+    s = text.strip()
+    lower = s.lower()
+    for mode, cmd_prefix, emoji, prefixes in MODE_TRIGGERS:
+        for p in prefixes:
+            if lower.startswith(p):
+                content = s[len(p):].strip()
+                if content:
+                    return mode, cmd_prefix, content, emoji
+    return None, None, text, None
 
 # Buttons, labels and chrome that come back with the text of any window and say
 # nothing about what happened.
@@ -1239,19 +1277,31 @@ class Remote:
                         self.say(msg, html=True)
                     return
 
-                if status_msg_id:
-                    self.edit(
-                        status_msg_id,
+                voice_mode, cmd_prefix, clean_content, emoji = detect_special_mode(prompt_en)
+                if voice_mode:
+                    prompt_en = f"{cmd_prefix} {clean_content}"
+                    display_prompt = f"{emoji} {prompt_en}"
+                    status_text = (
+                        f"{emoji} <b>Transcribed ({voice_mode.capitalize()} Mode):</b>\n"
+                        f"<i>\"{_esc(prompt_en)}\"</i>\n\n"
+                        f"⏳ <i>Queued for execution...</i>"
+                    )
+                else:
+                    display_prompt = f"🎙️ {prompt_en}"
+                    status_text = (
                         f"🎙️ <b>Transcribed & Translated:</b>\n"
                         f"<i>\"{_esc(prompt_en)}\"</i>\n\n"
-                        f"⏳ <i>Queued for execution...</i>",
+                        f"⏳ <i>Queued for execution...</i>"
                     )
+
+                if status_msg_id:
+                    self.edit(status_msg_id, status_text)
 
                 self.pending.append(prompt_en)
                 if self._card is not None and not self.pending_own_card:
                     self._new_card()
                 self.pending_own_card = True
-                self._prompts.append(f"🎙️ {prompt_en}")
+                self._prompts.append(display_prompt)
                 self._paint(icon=ICON_WORKING, head="waiting for a free window")
                 return
             except Exception as exc:
@@ -1277,7 +1327,22 @@ class Remote:
             self._command(text)
             return
 
-        prompt, _english = self._to_english(text)
+        # Check for mode prefix either on raw input (e.g. Romanian "Echipă: ...")
+        # or after translation (e.g. English "Team: ...")
+        raw_mode, raw_prefix, raw_content, raw_emoji = detect_special_mode(text)
+        if raw_mode:
+            clean_en, _ = self._to_english(raw_content)
+            prompt = f"{raw_prefix} {clean_en}".strip()
+            display_prompt = f"{raw_emoji} {prompt}"
+        else:
+            prompt, _english = self._to_english(text)
+            text_mode, cmd_prefix, clean_content, emoji = detect_special_mode(prompt)
+            if text_mode:
+                prompt = f"{cmd_prefix} {clean_content}".strip()
+                display_prompt = f"{emoji} {prompt}"
+            else:
+                display_prompt = prompt
+
         self.pending.append(prompt)
         if self._card is not None and not self.pending_own_card:
             # A card that has already reported a finished chain is closed;
@@ -1287,7 +1352,47 @@ class Remote:
         # The prompt shown is the English, because that is what will be typed.
         # Seeing it is the only chance to /stop a sentence the model mangled
         # before it lands in an agent.
-        self._prompts.append(prompt)
+        self._prompts.append(display_prompt)
+        self._paint(icon=ICON_WORKING, head="waiting for a free window")
+
+    def _queue_mode_prompt(self, mode, raw_text):
+        """Queue a prompt with a dedicated AntiGravity slash command mode.
+
+        mode is one of: 'teamwork', 'goal', 'plan'.
+        Translates raw_text to English, prefixes the command, and queues for autopilot.
+        """
+        mode_meta = {
+            "teamwork": ("/teamwork-preview", "👥", "Teamwork Mode"),
+            "goal": ("/goal", "🎯", "Goal Mode"),
+            "plan": ("/plan", "📋", "Plan Mode"),
+        }
+        cmd_prefix, emoji, title = mode_meta.get(mode, ("/teamwork-preview", "👥", "Teamwork Mode"))
+
+        # If user included an explicit trigger in their prompt (e.g. "team: do X"), strip it first
+        detected_mode, _, clean_content, _ = detect_special_mode(raw_text)
+        text_to_translate = clean_content if detected_mode else raw_text
+
+        prompt_en, _ = self._to_english(text_to_translate)
+        # Also check if translated text has a lingering prefix
+        detected_mode_en, _, clean_en, _ = detect_special_mode(prompt_en)
+        if detected_mode_en:
+            prompt_en = clean_en
+
+        final_prompt = f"{cmd_prefix} {prompt_en}".strip()
+        display_prompt = f"{emoji} {final_prompt}"
+
+        self.say(
+            f"{emoji} <b>Queued ({title}):</b>\n"
+            f"<i>\"{_esc(final_prompt)}\"</i>\n\n"
+            f"⏳ <i>Waiting for a free window...</i>",
+            html=True,
+        )
+
+        self.pending.append(final_prompt)
+        if self._card is not None and not self.pending_own_card:
+            self._new_card()
+        self.pending_own_card = True
+        self._prompts.append(display_prompt)
         self._paint(icon=ICON_WORKING, head="waiting for a free window")
 
     def _to_english(self, text):
@@ -1320,6 +1425,39 @@ class Remote:
         command = parts[0].lower()
         if command in ("/status", "/state"):
             self.say(self._describe())
+        elif command in ("/team", "/teamwork", "/teamwork-preview"):
+            prompt_raw = text.split(None, 1)[1] if len(parts) > 1 else ""
+            if not prompt_raw.strip():
+                self.say(
+                    "👥 <b>Teamwork Mode:</b>\n"
+                    "Specify what you want the subagents to do:\n"
+                    "<code>/team &lt;prompt in Romanian or English&gt;</code>",
+                    html=True,
+                )
+                return
+            self._queue_mode_prompt("teamwork", prompt_raw.strip())
+        elif command == "/goal":
+            prompt_raw = text.split(None, 1)[1] if len(parts) > 1 else ""
+            if not prompt_raw.strip():
+                self.say(
+                    "🎯 <b>Goal Mode:</b>\n"
+                    "Specify the autonomous goal:\n"
+                    "<code>/goal &lt;prompt in Romanian or English&gt;</code>",
+                    html=True,
+                )
+                return
+            self._queue_mode_prompt("goal", prompt_raw.strip())
+        elif command == "/plan":
+            prompt_raw = text.split(None, 1)[1] if len(parts) > 1 else ""
+            if not prompt_raw.strip():
+                self.say(
+                    "📋 <b>Plan Mode:</b>\n"
+                    "Specify what you want planned:\n"
+                    "<code>/plan &lt;prompt in Romanian or English&gt;</code>",
+                    html=True,
+                )
+                return
+            self._queue_mode_prompt("plan", prompt_raw.strip())
         elif command == "/usage":
             self._usage()
         elif command in ("/notes", "/note"):
