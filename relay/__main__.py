@@ -511,9 +511,31 @@ class VoicePrompt:
                 )
             print(f"[compose] built ahead of time in "
                   f"{(time.perf_counter() - started) * 1000:.0f}ms")
+            from .notes import prebuild as prebuild_notes
+            prebuild_notes(
+                on_paste=self.insert_prompt,
+                target_getter=lambda: (
+                    self.tracker.title if self.tracker is not None else None
+                ),
+            )
         except Exception as exc:
             # Not fatal: the window is simply built on the click instead.
             print(f"[compose] could not prebuild: {exc}")
+
+    def open_notes(self):
+        """Open the notes & ideas window. Called from the menu, so already on the GUI thread."""
+        from .notes import open_notes
+
+        try:
+            with self._hooks_down("the notes window"):
+                open_notes(
+                    on_paste=self.insert_prompt,
+                    target_getter=lambda: (
+                        self.tracker.title if self.tracker is not None else None
+                    ),
+                )
+        except Exception as exc:
+            self.feedback.error(f"could not open the notes window: {exc}")
 
     def open_compose(self):
         """The typed-text window. Called from the menu, so on the GUI thread."""
@@ -770,9 +792,11 @@ class VoicePrompt:
                 self.shutdown()
             return
 
+        from . import notes as notes_mod
         from .overlay import Orb
 
         prompts_mod.ensure_file()
+        notes_mod.ensure_file()
         self.orb = Orb(
             on_toggle=self.request_toggle,
             on_quit=self.shutdown,
@@ -785,6 +809,7 @@ class VoicePrompt:
             on_compose=self.open_compose,
             on_pick_look=self.pick_look,
             on_chain=self.open_chain,
+            on_notes=self.open_notes,
             orb_settings=self.config["orb"],
         )
         self.orb.level_getter = lambda: self.recorder.level

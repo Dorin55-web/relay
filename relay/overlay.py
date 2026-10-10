@@ -278,7 +278,7 @@ class Orb(QWidget):
     def __init__(self, on_toggle, on_quit, tooltip="F9",
                  prompts_getter=None, on_prompt=None, on_edit_prompts=None,
                  on_compose=None, on_pick_look=None, on_chain=None,
-                 orb_settings=None):
+                 on_notes=None, orb_settings=None):
         self.app = QApplication.instance() or QApplication(sys.argv)
         # Qt quits once the last primary window closes, and a Qt.Tool window -
         # which the dot is - does not count as one. Without this, closing the
@@ -293,6 +293,7 @@ class Orb(QWidget):
         self.on_compose = on_compose
         self.on_pick_look = on_pick_look
         self.on_chain = on_chain
+        self.on_notes = on_notes
         self.menu = None
         self._hotkey_label = tooltip
         self._prompts_getter = prompts_getter or (lambda: [])
@@ -402,6 +403,12 @@ class Orb(QWidget):
             edit_act = QAction("Edit prompts...", self)
             edit_act.triggered.connect(self._fire_edit_prompts)
             self.menu.addAction(edit_act)
+
+        if self.on_notes is not None:
+            notes_act = QAction("Notes & Ideas...", self)
+            notes_act.setToolTip("View and save your ideas, prompts and notes")
+            notes_act.triggered.connect(self._fire_notes)
+            self.menu.addAction(notes_act)
 
         self.menu.addSeparator()
         dictate_act = QAction(f"Dictate  ({tooltip})", self)
@@ -592,6 +599,14 @@ class Orb(QWidget):
             self.on_edit_prompts()
         except Exception as exc:
             print(f"[orb] could not open the prompt file: {exc}")
+
+    def _fire_notes(self):
+        if self.on_notes is None:
+            return
+        try:
+            self.on_notes()
+        except Exception as exc:
+            print(f"[orb] could not open the notes window: {exc}")
 
     # --- state, called from worker threads --------------------------------
 

@@ -78,7 +78,7 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 # copy of a list drifts, so tests/test_keeper.py holds this against the real
 # one - that test can see both, and this file cannot.
 ANSWERED_BY_RELAY = ("/stop", "/target", "/keys", "/help", "/more", "/shot",
-                     "/at", "/cancel", "/usage")
+                     "/at", "/cancel", "/usage", "/notes")
 
 WATCH_SECONDS = 5        # how often to look while Relay is up
 POLL_SECONDS = 25        # how long a message request is held open while it is down

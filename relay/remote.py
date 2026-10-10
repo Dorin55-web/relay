@@ -78,6 +78,7 @@ CANCEL_KEYBOARD = {
 COMMANDS = (
     ("status", "What it can see right now"),
     ("usage", "Quota and token activity"),
+    ("notes", "Saved notes & ideas - /notes add <idea>"),
     ("more", "The whole of the last result, not just the card"),
     ("shot", "A picture of the window"),
     ("target", "Choose which window to write into"),
@@ -1258,6 +1259,8 @@ class Remote:
             self.say(self._describe())
         elif command == "/usage":
             self._usage()
+        elif command in ("/notes", "/note"):
+            self._notes_command(parts[1:] if len(parts) > 1 else [])
         elif command == "/more":
             self._more()
         elif command == "/shot":
@@ -1307,6 +1310,49 @@ class Remote:
     def _usage(self):
         from . import usage
         self.say(usage.format_usage_card(), html=True)
+
+    def _notes_command(self, args):
+        from . import notes as notes_mod
+        if args and args[0].lower() in ("add", "new"):
+            idea_text = " ".join(args[1:]).strip()
+            if not idea_text:
+                self.say("Usage: /notes add <your idea or note text>")
+                return
+            parts = idea_text.splitlines()
+            title = parts[0][:40].strip()
+            note = notes_mod.add_note(title=title, text=idea_text, tag="Idea")
+            self.say(f"💡 <b>Idea saved!</b>\n\nTitle: <b>{note['title']}</b>\nSaved to notes.json in Relay desktop.", html=True)
+            return
+
+        all_notes = notes_mod.load()
+        if not all_notes:
+            self.say("You have no saved notes yet.\n\nUse '/notes add <idea>' or the desktop Relay bubble to save one.")
+            return
+
+        query = " ".join(args).strip() if args else ""
+        if query:
+            notes = notes_mod.filter_notes(query, all_notes)
+            header = f"📝 <b>Notes matching '{query}'</b>\n"
+        else:
+            notes = all_notes
+            header = "📝 <b>Saved Notes & Ideas</b>\n"
+
+        if not notes:
+            self.say(f"No notes matching '{query}'.")
+            return
+
+        lines = [header]
+        for i, n in enumerate(notes[:7], start=1):
+            title = n.get("title") or "Untitled"
+            tag = n.get("tag") or "Idea"
+            lines.append(f"{i}. [<b>{tag}</b>] {title}")
+            text_preview = (n.get("text") or "").strip().splitlines()
+            if text_preview:
+                snippet = text_preview[0][:50]
+                lines.append(f"   <i>{snippet}</i>")
+        if len(notes) > 7:
+            lines.append(f"\n<i>...and {len(notes) - 7} more in Relay desktop.</i>")
+        self.say("\n".join(lines), html=True)
 
     def _more(self):
         """The whole of the last result, in as many messages as that takes.

@@ -889,4 +889,12 @@ check("timestamp 0:45 is filtered out from card", "0:45" not in card_msg, card_m
 check("duplicate paragraph is deduplicated", card_msg.count("Mă bucur mult") == 1, card_msg)
 check("standalone emoji is merged", "acum! 🎉" in card_msg, card_msg)
 
+print("\n--- Milestone 4: /notes and /notes add commands ---")
+bot_notes, api_notes, _, _ = make()
+bot_notes._handle({"update_id": 99, "message": {"chat": {"id": MINE}, "text": "/notes add Build autonomous voice orchestrator"}})
+check("/notes add replied with confirmation", any("Idea saved" in s for s in api_notes.sent), str(api_notes.sent))
+api_notes.sent.clear()
+bot_notes._handle({"update_id": 100, "message": {"chat": {"id": MINE}, "text": "/notes"}})
+check("/notes lists saved ideas", any("Build autonomous voice" in s for s in api_notes.sent), str(api_notes.sent))
+
 sys.exit(report.finish())
