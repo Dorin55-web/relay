@@ -174,7 +174,7 @@ check("Ctrl+C simulated", "press c" in kb.keys)
 check("Ctrl+V simulated", "press v" in kb.keys)
 check("Enter was NOT simulated (no auto-submit)", not any("enter" in k.lower() for k in kb.keys))
 check("user clipboard restored intact", clip.value == "previous user notes", repr(clip.value))
-check("orb pulsed cyan", orb.pulses == [("cyan", 500)])
+check("orb remained still (no blue pulse animation)", orb.pulses == [])
 check("audio chime triggered", fb.success_count == 1)
 
 print("\n--- 2. empty box -> fallback to voice dictation ---")
@@ -343,7 +343,7 @@ check("Ctrl+C was NOT simulated (silent read)", not any("press c" in k for k in 
 check("Ctrl+A was simulated for replacement", "press a" in kb_uia.keys)
 check("Ctrl+V was simulated for replacement", "press v" in kb_uia.keys)
 check("user clipboard restored intact", clip_uia.value == "important user clip")
-check("orb pulsed cyan", orb_uia.pulses == [("cyan", 500)])
+check("orb remained still (no blue pulse animation)", orb_uia.pulses == [])
 check("audio chime triggered", fb_uia.success_count == 1)
 
 print("\n--- 11. Silent UIA mode: empty box (zero keystrokes) ---")
@@ -479,7 +479,7 @@ check("Ctrl+A was NOT simulated (zero blue highlight)", not any("press a" in k f
 check("Ctrl+V was NOT simulated", not any("press v" in k for k in kb_clean.keys))
 check("zero keystrokes emitted", len(kb_clean.keys) == 0)
 check("user clipboard completely untouched", clip_clean.value == "clean clip intact")
-check("orb pulsed cyan", orb_clean.pulses == [("cyan", 500)])
+check("orb remained still (no blue pulse animation)", orb_clean.pulses == [])
 check("audio chime triggered", fb_clean.success_count == 1)
 
 print("\n--- 15. VoicePrompt toggle on empty/deleted box starts dictation cleanly ---")
@@ -832,7 +832,7 @@ check("translator received Romanian text", trans_fb.calls == ["mesaj in romana"]
 check("fallback replacement simulated Ctrl+A", "press a" in kb_fb.keys)
 check("fallback replacement simulated Ctrl+V", "press v" in kb_fb.keys)
 check("user clipboard restored intact", clip_fb.value == "orig user clipboard")
-check("orb pulsed cyan", orb_fb.pulses == [("cyan", 500)])
+check("orb remained still (no blue pulse animation)", orb_fb.pulses == [])
 check("feedback success chime called", fb_fb.success_count == 1)
 
 print("\n--- 27. Optimistic UI does NOT prematurely turn orb blue in IDLE state ---")

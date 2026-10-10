@@ -188,7 +188,9 @@ class InplaceTranslator:
                 pass
 
     def _notify_success(self):
-        if self.orb_getter:
+        # No blue pulse or animation around the orb on in-place translation.
+        # The orb remains completely still and unaffected on F9 press.
+        if getattr(self.config, "inplace_pulse", False) and self.orb_getter:
             try:
                 orb = self.orb_getter()
                 if orb is not None and hasattr(orb, "pulse"):
