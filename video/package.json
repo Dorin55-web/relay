@@ -1,0 +1,19 @@
+{
+  "name": "relay-remotion-video",
+  "version": "1.0.0",
+  "description": "Programmatic promo video for Relay",
+  "scripts": {
+    "start": "remotion preview src/index.ts",
+    "build": "remotion render src/index.ts RelayPromo out/relay-promo.mp4",
+    "build:mobile": "remotion render src/index.ts RelayPromoMobile out/relay-promo-mobile.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.534",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.534",
+    "typescript": "^7.0.2"
+  }
+}

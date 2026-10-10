@@ -38,3 +38,7 @@ notes.json
 inbox/
 .agents/
 scratch/
+
+# Video generation (Remotion)
+video/node_modules/
+video/out/*.mp4
