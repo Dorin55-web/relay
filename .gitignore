@@ -38,3 +38,9 @@ notes.json
 inbox/
 .agents/
 scratch/
+
+# Local agent rules and ignore files (never push to git)
+.antigravityrules
+.antigravityignore
+AGENTS.md
+GEMINI.md
